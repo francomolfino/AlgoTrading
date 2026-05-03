@@ -50,3 +50,136 @@ def plot_price_volume_with_moving_averages(
     figure.autofmt_xdate()
     figure.tight_layout()
     return figure
+
+
+def plot_equity_curve_with_drawdown(frame: pd.DataFrame, title: str) -> plt.Figure:
+    """Grafica equity curve y drawdown para revisar un backtest."""
+    required_columns = ["date", "equity", "drawdown"]
+    missing = [column for column in required_columns if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Faltan columnas requeridas: {', '.join(missing)}")
+
+    dates = pd.to_datetime(frame["date"])
+    figure, (equity_axis, drawdown_axis) = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(12, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+
+    equity_axis.plot(dates, frame["equity"], color="#2563eb", linewidth=1.5)
+    equity_axis.set_title(title)
+    equity_axis.set_ylabel("Equity")
+    equity_axis.grid(True, alpha=0.25)
+
+    drawdown_axis.fill_between(dates, frame["drawdown"], 0, color="#dc2626", alpha=0.35)
+    drawdown_axis.set_ylabel("Drawdown")
+    drawdown_axis.grid(True, axis="y", alpha=0.25)
+
+    figure.autofmt_xdate()
+    figure.tight_layout()
+    return figure
+
+
+def plot_equity_comparison(
+    equity_curves: dict[str, pd.DataFrame],
+    title: str,
+) -> plt.Figure:
+    """Compara curvas de equity normalizadas a 1.0."""
+    if not equity_curves:
+        raise ValueError("Se requiere al menos una equity curve.")
+
+    figure, axis = plt.subplots(figsize=(12, 6))
+    for name, frame in equity_curves.items():
+        missing = [column for column in ["date", "equity"] if column not in frame.columns]
+        if missing:
+            raise ValueError(f"Faltan columnas requeridas: {', '.join(missing)}")
+        dates = pd.to_datetime(frame["date"])
+        normalized = frame["equity"] / frame["equity"].iloc[0]
+        axis.plot(dates, normalized, label=name, linewidth=1.4)
+
+    axis.set_title(title)
+    axis.set_ylabel("Equity normalizada")
+    axis.grid(True, alpha=0.25)
+    axis.legend(loc="best")
+    figure.autofmt_xdate()
+    figure.tight_layout()
+    return figure
+
+
+def plot_portfolio_equity_and_drawdown(
+    individual_equity: pd.DataFrame,
+    portfolio_equity: pd.DataFrame,
+    title: str,
+) -> plt.Figure:
+    """Grafica equity normalizada de activos y drawdown de la cartera."""
+    missing = [column for column in ["date", "equity", "drawdown"] if column not in portfolio_equity.columns]
+    if missing:
+        raise ValueError(f"Faltan columnas requeridas: {', '.join(missing)}")
+    if individual_equity.empty:
+        raise ValueError("individual_equity esta vacio.")
+
+    figure, (equity_axis, drawdown_axis) = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(12, 7),
+        sharex=False,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+
+    for column in individual_equity.columns:
+        normalized = individual_equity[column] / individual_equity[column].iloc[0]
+        equity_axis.plot(individual_equity.index, normalized, label=column, linewidth=1.0, alpha=0.7)
+
+    portfolio_normalized = portfolio_equity["equity"] / portfolio_equity["equity"].iloc[0]
+    equity_axis.plot(
+        pd.to_datetime(portfolio_equity["date"]),
+        portfolio_normalized,
+        label="equal_weight",
+        linewidth=2.2,
+        color="#111827",
+    )
+    equity_axis.set_title(title)
+    equity_axis.set_ylabel("Equity normalizada")
+    equity_axis.grid(True, alpha=0.25)
+    equity_axis.legend(loc="best")
+
+    drawdown_axis.fill_between(
+        pd.to_datetime(portfolio_equity["date"]),
+        portfolio_equity["drawdown"],
+        0,
+        color="#dc2626",
+        alpha=0.35,
+    )
+    drawdown_axis.set_ylabel("Drawdown cartera")
+    drawdown_axis.grid(True, axis="y", alpha=0.25)
+
+    figure.autofmt_xdate()
+    figure.tight_layout()
+    return figure
+
+
+def plot_correlation_heatmap(correlations: pd.DataFrame, title: str) -> plt.Figure:
+    """Grafica una matriz de correlaciones simple."""
+    if correlations.empty:
+        raise ValueError("correlations esta vacio.")
+    if correlations.shape[0] != correlations.shape[1]:
+        raise ValueError("La matriz de correlaciones debe ser cuadrada.")
+
+    figure, axis = plt.subplots(figsize=(7, 6))
+    image = axis.imshow(correlations.values, vmin=-1, vmax=1, cmap="coolwarm")
+    axis.set_title(title)
+    axis.set_xticks(range(len(correlations.columns)))
+    axis.set_yticks(range(len(correlations.index)))
+    axis.set_xticklabels(correlations.columns, rotation=45, ha="right")
+    axis.set_yticklabels(correlations.index)
+
+    for row_index in range(correlations.shape[0]):
+        for column_index in range(correlations.shape[1]):
+            value = correlations.iloc[row_index, column_index]
+            axis.text(column_index, row_index, f"{value:.2f}", ha="center", va="center", fontsize=9)
+
+    figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    figure.tight_layout()
+    return figure
