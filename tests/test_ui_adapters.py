@@ -58,6 +58,14 @@ from algotrading.ui.adapters.portfolio_adapter import (
     validate_portfolio_request,
 )
 from algotrading.ui.adapters.reports_adapter import build_experiment_zip, collect_experiment_report_files
+from algotrading.ui.adapters.research_adapter import (
+    build_research_summary,
+    load_robustness_for_experiment,
+    load_stress_for_experiment,
+    research_records_frame,
+    save_robustness_for_experiment,
+    save_stress_for_experiment,
+)
 from algotrading.ui.adapters.risk_adapter import RiskSettings, validate_risk_settings
 from algotrading.ui.adapters.robustness_adapter import (
     RobustnessResult,
@@ -567,6 +575,130 @@ def test_evidence_score_penalizes_missing_robustness_and_uses_matching_diagnosti
     assert stressed_frame.loc[stressed_frame["componente"] == "Stress tests", "estado"].iloc[0] == "fragil"
 
 
+def test_evidence_score_handles_missing_data_and_penalizes_weak_setup():
+    result = BacktestResult(
+        equity_curve=pd.DataFrame(),
+        trades=pd.DataFrame(),
+        orders=pd.DataFrame(),
+        metrics={
+            "number_of_trades": 0,
+            "max_drawdown": -0.65,
+            "excess_return_vs_benchmark": -0.20,
+        },
+        config=BacktestConfig(commission_bps=0, slippage_bps=0),
+    )
+
+    score = build_evidence_score_from_result(
+        result,
+        parameter_count=7,
+        symbol_count=1,
+        strategy_key="rsi",
+        symbol="SPY",
+    )
+    frame = components_frame(score)
+
+    assert score.score < 30
+    assert frame.loc[frame["componente"] == "Cantidad de trades", "estado"].iloc[0] == "sin evidencia"
+    assert frame.loc[frame["componente"] == "Drawdown", "estado"].iloc[0] == "muy alto"
+    assert frame.loc[frame["componente"] == "Cantidad de parametros", "estado"].iloc[0] == "sobreajuste probable"
+
+
+def test_research_adapter_persists_associated_validation_and_builds_summary():
+    root = _workspace_tmp("research_summary")
+    data_dir = root / "data"
+    experiments_dir = root / "experiments"
+    save_ohlcv(_frame(list(range(100, 380))), data_dir / "SPY_1D.csv")
+    artifacts = run_backtest_request(
+        BacktestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            commission_bps=1,
+            slippage_bps=2,
+            experiment_name="research_integration",
+            experiments_root=experiments_dir,
+        )
+    )
+    record = list_experiments(experiments_dir)[0]
+    save_research_notes(
+        record.path,
+        ResearchNotes(
+            status="Promising",
+            hypothesis="Cruce corto captura tramo tendencial.",
+            conclusion="Sirve para seguir validando, no para operar.",
+            next_test="Stress test y multi-activo.",
+            tags=("trend", "spy"),
+            favorite=True,
+        ),
+    )
+    robustness = RobustnessResult(
+        train_test=pd.DataFrame([{"symbol": "SPY", "strategy": "sma_cross_3_5"}]),
+        walk_forward=pd.DataFrame([{"symbol": "SPY", "strategy": "sma_cross_3_5"}]),
+        regimes=pd.DataFrame(),
+        diagnostics=pd.DataFrame(
+            [
+                {"symbol": "SPY", "strategy": "buy_and_hold", "flags": ""},
+                {
+                    "symbol": "SPY",
+                    "strategy": "sma_cross_3_5",
+                    "flags": "",
+                    "robustness_score": 82.0,
+                    "test_vs_buy_and_hold_return": 0.04,
+                    "abs_train_test_return_gap": 0.05,
+                    "test_number_of_trades": 8,
+                    "walk_forward_windows": 3,
+                    "walk_forward_positive_rate": 0.67,
+                    "walk_forward_avg_vs_buy_and_hold": 0.01,
+                },
+            ]
+        ),
+    )
+    robustness_request = RobustnessRequest(
+        symbols=("SPY",),
+        strategy_key="sma_cross",
+        strategy_parameters={"fast_window": 3, "slow_window": 5},
+        data_dir=data_dir,
+        interval="1d",
+    )
+    stress = StressTestResult(
+        request=StressTestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+        ),
+        scenarios=(),
+        comparison=pd.DataFrame(
+            [
+                {"scenario": "Base", "total_return": 0.20, "delta_return_vs_base": 0.0, "number_of_trades": 12},
+                {"scenario": "Comision x2", "total_return": 0.18, "delta_return_vs_base": -0.02, "number_of_trades": 12},
+            ]
+        ),
+        conclusion="Robusta",
+        flags=("Sin quiebres obvios en estos stresses. No implica aptitud para operar real.",),
+    )
+
+    save_robustness_for_experiment(record.path, robustness_request, robustness)
+    save_stress_for_experiment(record.path, stress)
+    summary = build_research_summary(record.path)
+    frame = research_records_frame([record])
+
+    assert artifacts.experiment_dir == record.path
+    assert load_robustness_for_experiment(record.path) is not None
+    assert load_stress_for_experiment(record.path) is not None
+    assert summary.has_robustness is True
+    assert summary.has_stress is True
+    assert summary.journal_state == "Promising"
+    assert summary.journal_favorite is True
+    assert summary.stress_summary["conclusion"] == "Robusta"
+    assert "evidence_score" in frame.columns
+    assert bool(frame.loc[0, "has_robustness"]) is True
+    assert bool(frame.loc[0, "has_stress"]) is True
+
+
 def test_ui_backtest_preflight_blocks_short_period():
     root = _workspace_tmp("ui_backtest_preflight_short")
     data_dir = root / "data"
@@ -734,6 +866,27 @@ def test_stress_conclusion_classifies_fragile_and_unreliable_cases():
     assert any("Muy pocos trades" in flag for flag in unreliable_flags)
     assert robust_label == "Robusta"
     assert robust_flags == ["Sin quiebres obvios en estos stresses. No implica aptitud para operar real."]
+
+
+def test_ui_stress_adapter_handles_empty_trades():
+    root = _workspace_tmp("ui_stress_empty_trades")
+    data_dir = root / "data"
+    save_ohlcv(_frame([100] * 40), data_dir / "SPY_1D.csv")
+
+    result = run_stress_test_request(
+        StressTestRequest(
+            symbol="SPY",
+            strategy_key="breakout",
+            strategy_parameters={"entry_window": 20, "exit_window": 10},
+            data_dir=data_dir,
+            interval="1d",
+            remove_best_trades=3,
+        )
+    )
+
+    assert result.comparison["number_of_trades"].iloc[0] == 0
+    assert "Sin mejores trades" in result.comparison["scenario"].tolist()
+    assert result.conclusion == "No confiable"
 
 
 def test_ui_portfolio_adapter_runs_equal_weight():
