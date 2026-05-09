@@ -4,6 +4,8 @@ Proyecto educativo para aprender trading algorítmico construyendo herramientas 
 
 Este proyecto no promete rentabilidad ni intenta operar dinero real. La idea es aprender a descargar datos, validarlos, analizarlos, backtestear estrategias simples y comparar resultados con cuidado.
 
+La app y el laboratorio fueron hechos 100% vibecodeando.
+
 ## Etapa 1: datos históricos
 
 Incluye:

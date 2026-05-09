@@ -1,9 +1,11 @@
-import pandas as pd
-import pytest
 from pathlib import Path
 from uuid import uuid4
 
+import pandas as pd
+import pytest
+
 from algotrading.data.storage import save_ohlcv
+from algotrading.backtesting import BacktestConfig, BacktestResult
 from algotrading.ui.adapters.backtest_adapter import (
     BacktestRequest,
     build_result_warnings,
@@ -25,6 +27,16 @@ from algotrading.ui.adapters.experiment_adapter import (
     list_experiments,
     load_experiment_details,
 )
+from algotrading.ui.adapters.journal_adapter import (
+    DEFAULT_RESEARCH_STATUS,
+    RESEARCH_NOTE_STATUSES,
+    RESEARCH_NOTES_FILENAME,
+    ResearchNotes,
+    load_research_notes,
+    parse_tags,
+    save_research_notes,
+    tags_to_text,
+)
 from algotrading.ui.adapters.paper_adapter import (
     PaperTradingRequest,
     run_paper_trading_request,
@@ -39,17 +51,33 @@ from algotrading.ui.adapters.portfolio_adapter import (
 from algotrading.ui.adapters.reports_adapter import build_experiment_zip, collect_experiment_report_files
 from algotrading.ui.adapters.risk_adapter import RiskSettings, validate_risk_settings
 from algotrading.ui.adapters.robustness_adapter import (
+    RobustnessResult,
     RobustnessRequest,
     regime_comment,
     run_robustness_request,
 )
 from algotrading.ui.adapters.settings_adapter import UISettings, load_ui_settings, save_ui_settings
+from algotrading.ui.adapters.stress_adapter import (
+    StressTestResult,
+    StressTestRequest,
+    equity_curves_frame,
+    run_stress_test_request,
+    stress_conclusion,
+)
 from algotrading.ui.adapters.strategy_adapter import (
+    STRATEGIES,
     generate_strategy_signals,
+    get_strategy_config,
     signal_events_frame,
     signal_summary,
+    strategy_metadata_frame,
     validate_strategy_parameters,
 )
+from algotrading.ui.adapters.evidence_adapter import (
+    build_evidence_score_from_result,
+    components_frame,
+)
+from algotrading.ui.adapters.verdict_adapter import build_research_verdict_from_result
 
 
 def _frame(prices):
@@ -90,11 +118,25 @@ def test_ui_data_adapter_lists_and_validates_assets():
 def test_ui_strategy_adapter_validates_and_summarizes_signals():
     frame = _frame([100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111])
     params = {"fast_window": 3, "slow_window": 5}
+    config = get_strategy_config("sma_cross")
 
     warnings = validate_strategy_parameters("sma_cross", params, frame_length=len(frame))
     signals = generate_strategy_signals(frame, "sma_cross", params)
     summary = signal_summary(signals)
+    metadata = strategy_metadata_frame("sma_cross")
 
+    assert config.category == "Trend following"
+    assert config.expected_market_regime
+    assert config.failure_modes
+    assert config.recommended_tests
+    assert config.complexity_level == "Baja-media"
+    assert metadata["campo"].tolist() == [
+        "Categoria",
+        "Regimen esperado",
+        "Complejidad",
+        "Modos de falla",
+        "Tests recomendados",
+    ]
     assert warnings == []
     assert signals["signal"].tolist() == [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
     assert summary["entries"] == 1
@@ -104,6 +146,22 @@ def test_ui_strategy_adapter_validates_and_summarizes_signals():
     assert events.loc[0, "previous_signal"] == 0
     with pytest.raises(ValueError, match="media rapida"):
         validate_strategy_parameters("sma_cross", {"fast_window": 6, "slow_window": 5})
+
+
+def test_strategy_registry_metadata_is_complete_for_all_strategies():
+    assert set(STRATEGIES) == {"buy_and_hold", "sma_cross", "rsi", "breakout", "trend_filter"}
+
+    for strategy_key, config in STRATEGIES.items():
+        metadata = strategy_metadata_frame(strategy_key)
+
+        assert config.category
+        assert config.expected_market_regime
+        assert config.failure_modes
+        assert config.recommended_tests
+        assert config.complexity_level
+        assert metadata.shape == (5, 2)
+        assert metadata["valor"].map(lambda value: isinstance(value, str) and bool(value)).all()
+        assert all(parameter.help for parameter in config.parameters)
 
 
 def test_ui_risk_adapter_warns_on_aggressive_settings():
@@ -149,6 +207,86 @@ def test_ui_backtest_adapter_runs_and_saves_experiment():
     assert build_experiment_zip(records[0].path)
 
 
+def test_ui_journal_adapter_saves_notes_and_enriches_experiment_records():
+    root = _workspace_tmp("ui_journal")
+    data_dir = root / "data"
+    experiments_dir = root / "experiments"
+    save_ohlcv(_frame([100, 101, 102, 103, 104, 105, 106, 107]), data_dir / "SPY_1D.csv")
+    run_backtest_request(
+        BacktestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            commission_bps=0,
+            slippage_bps=0,
+            experiment_name="journal_test",
+            experiments_root=experiments_dir,
+        )
+    )
+    record = list_experiments(experiments_dir)[0]
+
+    assert load_research_notes(record.path).status == DEFAULT_RESEARCH_STATUS
+    assert parse_tags("trend, SPY; trend, revisar") == ("trend", "spy", "revisar")
+    assert tags_to_text(("trend", "spy")) == "trend, spy"
+
+    notes_path = save_research_notes(
+        record.path,
+        ResearchNotes(
+            status="Promising",
+            hypothesis="Cruce captura tendencias largas.",
+            conclusion="Necesita robustez multi-activo.",
+            next_test="Correr walk-forward.",
+            tags=("trend", "spy", "trend"),
+            favorite=True,
+        ),
+    )
+    updated = list_experiments(experiments_dir)[0]
+    loaded = load_research_notes(record.path)
+
+    assert notes_path.name == RESEARCH_NOTES_FILENAME
+    assert loaded.status == "Promising"
+    assert loaded.tags == ("trend", "spy")
+    assert loaded.favorite is True
+    assert loaded.updated_at_utc
+    assert updated.status == "Promising"
+    assert updated.favorite is True
+    assert updated.tags == ("trend", "spy")
+
+
+def test_ui_journal_adapter_normalizes_unknown_status_and_tags():
+    experiment_dir = _workspace_tmp("ui_journal_normalize")
+    notes_path = experiment_dir / RESEARCH_NOTES_FILENAME
+    notes_path.write_text(
+        """
+{
+  "status": "Definitely Not A Status",
+  "hypothesis": "  revisar  ",
+  "tags": ["Trend", "trend", "  RSI  ", ""],
+  "favorite": true
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    notes = load_research_notes(experiment_dir)
+    saved_path = save_research_notes(
+        experiment_dir,
+        ResearchNotes(status="Bad Status", hypothesis="  h  ", tags=("A", "a", "B")),
+    )
+    saved = load_research_notes(experiment_dir)
+
+    assert notes.status == DEFAULT_RESEARCH_STATUS
+    assert notes.tags == ("trend", "rsi")
+    assert notes.favorite is True
+    assert saved_path == notes_path
+    assert saved.status == DEFAULT_RESEARCH_STATUS
+    assert saved.hypothesis == "h"
+    assert saved.tags == ("a", "b")
+    assert DEFAULT_RESEARCH_STATUS in RESEARCH_NOTE_STATUSES
+
+
 def test_ui_trade_details_frame_formats_trade_rows():
     trades = pd.DataFrame(
         {
@@ -175,6 +313,142 @@ def test_ui_trade_details_frame_formats_trade_rows():
     assert details.loc[0, "cantidad"] == 2.5
     assert details.loc[0, "roi_pct"] == pytest.approx(9.788)
     assert details.loc[0, "comisiones"] == pytest.approx(0.53)
+
+
+def test_research_verdict_flags_weak_evidence():
+    equity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=30, freq="D"),
+            "equity": [10_000 + index for index in range(30)],
+        }
+    )
+    result = BacktestResult(
+        equity_curve=equity,
+        trades=pd.DataFrame(),
+        orders=pd.DataFrame(),
+        metrics={
+            "number_of_trades": 2,
+            "max_drawdown": -0.35,
+            "sharpe_ratio": 1.2,
+            "excess_return_vs_benchmark": -0.05,
+        },
+        config=BacktestConfig(),
+    )
+
+    verdict = build_research_verdict_from_result(
+        result,
+        parameter_count=5,
+        symbol_count=1,
+    )
+
+    assert verdict.reliability == "Baja"
+    assert verdict.benchmark_status == "Pierde contra benchmark"
+    assert any("Pocos trades" in flag for flag in verdict.flags)
+    assert any("Drawdown peligroso" in flag for flag in verdict.flags)
+    assert any("sobreoptimizacion" in flag for flag in verdict.flags)
+    assert "Ampliar el periodo" in verdict.next_action
+
+
+def test_evidence_score_penalizes_missing_robustness_and_uses_matching_diagnostics():
+    equity = pd.DataFrame(
+        {
+            "date": pd.date_range("2020-01-01", periods=800, freq="D"),
+            "equity": [10_000 + index for index in range(800)],
+        }
+    )
+    result = BacktestResult(
+        equity_curve=equity,
+        trades=pd.DataFrame(),
+        orders=pd.DataFrame(),
+        metrics={
+            "number_of_trades": 12,
+            "max_drawdown": -0.12,
+            "sharpe_ratio": 0.9,
+            "excess_return_vs_benchmark": 0.03,
+        },
+        config=BacktestConfig(commission_bps=1, slippage_bps=2),
+    )
+    robustness = RobustnessResult(
+        train_test=pd.DataFrame(),
+        walk_forward=pd.DataFrame(),
+        regimes=pd.DataFrame(),
+        diagnostics=pd.DataFrame(
+            [
+                {
+                    "symbol": "SPY",
+                    "strategy": "sma_cross_50_200",
+                    "test_vs_buy_and_hold_return": 0.04,
+                    "abs_train_test_return_gap": 0.08,
+                    "test_number_of_trades": 7,
+                    "walk_forward_windows": 3,
+                    "walk_forward_positive_rate": 0.67,
+                    "walk_forward_avg_vs_buy_and_hold": 0.01,
+                },
+                {
+                    "symbol": "QQQ",
+                    "strategy": "sma_cross_50_200",
+                    "test_vs_buy_and_hold_return": 0.01,
+                    "abs_train_test_return_gap": 0.10,
+                    "test_number_of_trades": 6,
+                    "walk_forward_windows": 3,
+                    "walk_forward_positive_rate": 0.60,
+                    "walk_forward_avg_vs_buy_and_hold": 0.005,
+                },
+            ]
+        ),
+    )
+
+    base_score = build_evidence_score_from_result(
+        result,
+        parameter_count=2,
+        symbol_count=1,
+        strategy_key="sma_cross",
+        symbol="SPY",
+    )
+    robust_score = build_evidence_score_from_result(
+        result,
+        parameter_count=2,
+        symbol_count=1,
+        strategy_key="sma_cross",
+        symbol="SPY",
+        robustness_result=robustness,
+    )
+    fragile_stress = StressTestResult(
+        request=StressTestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 50, "slow_window": 200},
+        ),
+        scenarios=(),
+        comparison=pd.DataFrame(
+            [
+                {"scenario": "Base", "delta_return_vs_base": 0.0},
+                {"scenario": "Comision x2", "delta_return_vs_base": -0.35},
+            ]
+        ),
+        conclusion="Fragil",
+        flags=("El retorno cae demasiado frente al escenario base.",),
+    )
+    stressed_score = build_evidence_score_from_result(
+        result,
+        parameter_count=2,
+        symbol_count=1,
+        strategy_key="sma_cross",
+        symbol="SPY",
+        robustness_result=robustness,
+        stress_result=fragile_stress,
+    )
+    frame = components_frame(robust_score)
+    stressed_frame = components_frame(stressed_score)
+
+    assert robust_score.score > base_score.score
+    assert stressed_score.score < robust_score.score
+    assert sum(component.weight for component in robust_score.components) == 100
+    assert frame["componente"].tolist()[0] == "Cantidad de trades"
+    assert frame.loc[frame["componente"] == "Out-of-sample", "estado"].iloc[0] == "bien"
+    assert frame.loc[frame["componente"] == "Validacion multi-activo", "estado"].iloc[0] == "aceptable"
+    assert frame.loc[frame["componente"] == "Stress tests", "estado"].iloc[0] == "no corrido"
+    assert stressed_frame.loc[stressed_frame["componente"] == "Stress tests", "estado"].iloc[0] == "fragil"
 
 
 def test_ui_backtest_preflight_blocks_short_period():
@@ -277,6 +551,73 @@ def test_ui_robustness_adapter_runs_train_test():
     assert not result.diagnostics.empty
     assert not result.regimes.empty
     assert regime_comment(result.regimes)
+
+
+def test_ui_stress_adapter_runs_base_and_adverse_scenarios():
+    root = _workspace_tmp("ui_stress")
+    data_dir = root / "data"
+    save_ohlcv(_frame(list(range(100, 140))), data_dir / "SPY_1D.csv")
+
+    result = run_stress_test_request(
+        StressTestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            commission_bps=1,
+            slippage_bps=2,
+            remove_best_trades=1,
+        )
+    )
+    curves = equity_curves_frame(result.scenarios)
+
+    assert result.conclusion in {"Robusta", "Fragil", "No confiable"}
+    assert result.comparison["scenario"].tolist() == [
+        "Base",
+        "Comision x2",
+        "Slippage x2",
+        "Ejecucion +1 barra",
+        "Sin mejores 1 trades",
+        "Sin mejor mes",
+    ]
+    assert "delta_return_vs_base" in result.comparison.columns
+    assert not curves.empty
+    assert "Base" in curves.columns
+    assert result.comparison.loc[0, "method"] == "backtest"
+    assert "post-hoc" in result.comparison["method"].tolist()
+
+
+def test_stress_conclusion_classifies_fragile_and_unreliable_cases():
+    fragile = pd.DataFrame(
+        [
+            {"total_return": 0.40, "number_of_trades": 12, "max_drawdown": -0.20, "delta_return_vs_base": 0.0},
+            {"total_return": 0.05, "number_of_trades": 12, "max_drawdown": -0.22, "delta_return_vs_base": -0.35},
+        ]
+    )
+    unreliable = pd.DataFrame(
+        [
+            {"total_return": 0.20, "number_of_trades": 3, "max_drawdown": -0.10, "delta_return_vs_base": 0.0},
+            {"total_return": 0.18, "number_of_trades": 3, "max_drawdown": -0.11, "delta_return_vs_base": -0.02},
+        ]
+    )
+    robust = pd.DataFrame(
+        [
+            {"total_return": 0.20, "number_of_trades": 20, "max_drawdown": -0.15, "delta_return_vs_base": 0.0},
+            {"total_return": 0.14, "number_of_trades": 20, "max_drawdown": -0.16, "delta_return_vs_base": -0.06},
+        ]
+    )
+
+    fragile_label, fragile_flags = stress_conclusion(fragile)
+    unreliable_label, unreliable_flags = stress_conclusion(unreliable)
+    robust_label, robust_flags = stress_conclusion(robust)
+
+    assert fragile_label == "Fragil"
+    assert any("retorno cae" in flag for flag in fragile_flags)
+    assert unreliable_label == "No confiable"
+    assert any("Muy pocos trades" in flag for flag in unreliable_flags)
+    assert robust_label == "Robusta"
+    assert robust_flags == ["Sin quiebres obvios en estos stresses. No implica aptitud para operar real."]
 
 
 def test_ui_portfolio_adapter_runs_equal_weight():

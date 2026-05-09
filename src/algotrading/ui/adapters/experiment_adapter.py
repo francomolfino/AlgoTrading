@@ -10,6 +10,7 @@ import pandas as pd
 
 from algotrading.experiments.compare import compare_experiments, find_experiment_dirs
 from algotrading.ui.adapters.backtest_adapter import metrics_frame
+from algotrading.ui.adapters.journal_adapter import load_research_notes
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,9 @@ class ExperimentRecord:
     total_return: float | None
     sharpe_ratio: float | None
     max_drawdown: float | None
+    status: str
+    tags: tuple[str, ...]
+    favorite: bool
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,7 @@ def list_experiments(root: Path | str) -> list[ExperimentRecord]:
         summary = _safe_read_csv(directory / "summary.csv")
         first_row = summary.iloc[0].to_dict() if not summary.empty else {}
         strategy_config = config.get("strategy", {})
+        research_notes = load_research_notes(directory)
         records.append(
             ExperimentRecord(
                 path=directory,
@@ -62,6 +67,9 @@ def list_experiments(root: Path | str) -> list[ExperimentRecord]:
                 total_return=_optional_float(first_row.get("total_return")),
                 sharpe_ratio=_optional_float(first_row.get("sharpe_ratio")),
                 max_drawdown=_optional_float(first_row.get("max_drawdown")),
+                status=research_notes.status,
+                tags=research_notes.tags,
+                favorite=research_notes.favorite,
             )
         )
     return sorted(records, key=lambda record: record.created_at or record.run_id, reverse=True)
@@ -77,6 +85,9 @@ def records_frame(records: list[ExperimentRecord]) -> pd.DataFrame:
                 "created_at": record.created_at,
                 "strategy": record.strategy,
                 "symbols": ", ".join(record.symbols),
+                "status": record.status,
+                "favorite": record.favorite,
+                "tags": ", ".join(record.tags),
                 "total_return": record.total_return,
                 "sharpe_ratio": record.sharpe_ratio,
                 "max_drawdown": record.max_drawdown,
@@ -90,12 +101,18 @@ def filter_records(
     records: list[ExperimentRecord],
     strategy: str | None = None,
     symbol: str | None = None,
+    status: str | None = None,
+    favorites_only: bool = False,
 ) -> list[ExperimentRecord]:
     result = records
     if strategy:
         result = [record for record in result if strategy.lower() in record.strategy.lower()]
     if symbol:
         result = [record for record in result if any(symbol.upper() in item.upper() for item in record.symbols)]
+    if status:
+        result = [record for record in result if record.status == status]
+    if favorites_only:
+        result = [record for record in result if record.favorite]
     return result
 
 
@@ -106,6 +123,8 @@ def sort_records(records: list[ExperimentRecord], by: str, ascending: bool = Fal
         "sharpe": lambda record: _sort_value(record.sharpe_ratio),
         "drawdown": lambda record: _sort_value(record.max_drawdown),
         "nombre": lambda record: record.name,
+        "estado": lambda record: record.status,
+        "favoritos": lambda record: (record.favorite, record.created_at or record.run_id),
     }
     return sorted(records, key=key_map.get(by, key_map["fecha"]), reverse=not ascending)
 

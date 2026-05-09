@@ -88,7 +88,7 @@ def build_equity_drawdown_chart_html(
     data = _date_sorted(frame)
     equity_series = _line_data(data, "equity")
     benchmark_series = _line_data(data, "benchmark_equity") if "benchmark_equity" in data else []
-    drawdown_series = _line_data(data, "drawdown") if "drawdown" in data else []
+    drawdown_series = _percent_line_data(data, "drawdown") if "drawdown" in data else []
     equity_id = _dom_id("equity")
     drawdown_id = _dom_id("drawdown")
     payload = {
@@ -111,7 +111,7 @@ def build_equity_drawdown_chart_html(
   <div class="tv-title">{html.escape(title)}</div>
   {_equity_legend_html(has_benchmark=bool(benchmark_series), log_scale=log_scale)}
   <div id="{equity_id}" class="tv-chart" style="height:{equity_height}px;"></div>
-  <div class="tv-panel-label">Drawdown (escala lineal, valores negativos)</div>
+  <div class="tv-panel-label">Drawdown (escala lineal, % negativos)</div>
   <div id="{drawdown_id}" class="tv-chart tv-chart-spaced" style="height:{drawdown_height}px;"></div>
   {_attribution_html()}
 </div>
@@ -338,7 +338,11 @@ if (payload.drawdown.length > 0) {
     topColor: 'rgba(220, 38, 38, 0.05)',
     bottomColor: 'rgba(220, 38, 38, 0.35)',
     lineWidth: 1,
-    priceFormat: { type: 'percent' }
+    priceFormat: {
+      type: 'custom',
+      minMove: 0.1,
+      formatter: (price) => `${price.toFixed(1)}%`
+    }
   });
   drawdown.setData(payload.drawdown);
 }
@@ -452,6 +456,18 @@ def _line_data(frame: pd.DataFrame, column: str) -> list[dict[str, float | str]]
             continue
         rows.append({"time": _date_value(row["date"]), "value": value})
     return rows
+
+
+def _percent_line_data(frame: pd.DataFrame, column: str) -> list[dict[str, float | str]]:
+    raw_rows = _line_data(frame, column)
+    if not raw_rows:
+        return []
+    max_abs = max(abs(float(row["value"])) for row in raw_rows)
+    scale = 100 if max_abs <= 1 else 1
+    return [
+        {"time": row["time"], "value": round(float(row["value"]) * scale, 6)}
+        for row in raw_rows
+    ]
 
 
 def _volume_data(frame: pd.DataFrame) -> list[dict[str, float | str]]:

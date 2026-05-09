@@ -33,6 +33,11 @@ class StrategyUIConfig:
     label: str
     description: str
     risk_note: str
+    category: str
+    expected_market_regime: str
+    failure_modes: tuple[str, ...]
+    recommended_tests: tuple[str, ...]
+    complexity_level: str
     parameters: tuple[StrategyParameter, ...]
     function: Callable[..., pd.DataFrame]
 
@@ -43,6 +48,19 @@ STRATEGIES: dict[str, StrategyUIConfig] = {
         label="Buy and hold",
         description="Compra y mantiene. Es el benchmark minimo que toda estrategia deberia mirar.",
         risk_note="Puede tener drawdowns profundos porque siempre esta expuesta.",
+        category="Benchmark",
+        expected_market_regime="Mercados alcistas o activos con tendencia secular positiva.",
+        failure_modes=(
+            "Drawdowns largos y profundos.",
+            "Exposicion permanente a crashes y gaps.",
+            "No distingue entre regimenes de mercado.",
+        ),
+        recommended_tests=(
+            "Usarlo como comparacion minima de cualquier estrategia.",
+            "Revisar max drawdown y tiempo de recuperacion.",
+            "Comparar contra cartera multi-activo si aplica.",
+        ),
+        complexity_level="Baja",
         parameters=(),
         function=generate_buy_and_hold_signals,
     ),
@@ -51,6 +69,19 @@ STRATEGIES: dict[str, StrategyUIConfig] = {
         label="Cruce de medias moviles",
         description="Long cuando la media rapida supera a la media lenta.",
         risk_note="Llega tarde por construccion y puede sufrir en mercados laterales.",
+        category="Trend following",
+        expected_market_regime="Tendencias persistentes con movimientos amplios.",
+        failure_modes=(
+            "Whipsaws en mercados laterales.",
+            "Entradas tardias despues de gran parte del movimiento.",
+            "Dependencia fuerte de ventanas elegidas.",
+        ),
+        recommended_tests=(
+            "Sensibilidad de fast/slow window.",
+            "Train/test y walk-forward.",
+            "Comparar contra buy and hold en activos con y sin tendencia.",
+        ),
+        complexity_level="Baja-media",
         parameters=(
             StrategyParameter(
                 "fast_window",
@@ -80,6 +111,19 @@ STRATEGIES: dict[str, StrategyUIConfig] = {
         label="RSI basico",
         description="Entra cuando RSI cae bajo sobreventa y sale al superar sobrecompra.",
         risk_note="Puede comprar activos que siguen cayendo; no es una garantia de rebote.",
+        category="Mean reversion",
+        expected_market_regime="Mercados laterales o con reversiones frecuentes.",
+        failure_modes=(
+            "Atrapar cuchillos en tendencias bajistas fuertes.",
+            "Demasiadas senales ruidosas con umbrales cercanos.",
+            "Mal desempeno si no hay filtro de tendencia o riesgo.",
+        ),
+        recommended_tests=(
+            "Separar periodos bull/bear.",
+            "Probar con filtro de tendencia.",
+            "Stress test de slippage y stop loss.",
+        ),
+        complexity_level="Media",
         parameters=(
             StrategyParameter("window", "Ventana RSI", "int", 14, 2, 100, 1, "Barras usadas para calcular RSI."),
             StrategyParameter("oversold", "Sobreventa", "float", 30.0, 1.0, 60.0, 1.0, "Umbral de entrada."),
@@ -92,6 +136,19 @@ STRATEGIES: dict[str, StrategyUIConfig] = {
         label="Breakout simple",
         description="Entra al superar maximos previos y sale al perder minimos previos.",
         risk_note="Puede encadenar falsas rupturas si el mercado esta lateral.",
+        category="Momentum / breakout",
+        expected_market_regime="Rupturas con continuacion y volatilidad expansiva.",
+        failure_modes=(
+            "Falsos breakouts en rangos laterales.",
+            "Entradas despues de spikes agotados.",
+            "Costos altos si opera demasiado en ruido.",
+        ),
+        recommended_tests=(
+            "Sensibilidad de ventanas entry/exit.",
+            "Prueba multi-activo.",
+            "Quitar mejores trades para ver dependencia de pocos outliers.",
+        ),
+        complexity_level="Media",
         parameters=(
             StrategyParameter("entry_window", "Ventana entrada", "int", 55, 2, 300, 1, "Maximo previo a superar."),
             StrategyParameter("exit_window", "Ventana salida", "int", 20, 2, 300, 1, "Minimo previo que dispara salida."),
@@ -103,6 +160,19 @@ STRATEGIES: dict[str, StrategyUIConfig] = {
         label="Cruce con filtro de tendencia",
         description="Cruce de medias habilitado solo cuando el precio supera una media larga.",
         risk_note="Reduce operaciones contra tendencia, pero puede quedar fuera de rebotes rapidos.",
+        category="Trend following con filtro",
+        expected_market_regime="Tendencias alcistas persistentes con menor ruido bajista.",
+        failure_modes=(
+            "Quedar fuera en recuperaciones rapidas.",
+            "Sobreajuste por combinar varias ventanas.",
+            "Falsa sensacion de seguridad si reduce trades demasiado.",
+        ),
+        recommended_tests=(
+            "Penalizar configuraciones con pocos trades.",
+            "Walk-forward con varias ventanas.",
+            "Comparar contra SMA cross simple y buy and hold.",
+        ),
+        complexity_level="Media-alta",
         parameters=(
             StrategyParameter("fast_window", "Media rapida", "int", 20, 2, 300, 1, "Ventana corta del cruce."),
             StrategyParameter("slow_window", "Media lenta", "int", 100, 5, 500, 1, "Ventana larga del cruce."),
@@ -126,6 +196,19 @@ def get_strategy_config(strategy_key: str) -> StrategyUIConfig:
 
 def default_parameters(strategy_key: str) -> dict[str, int | float]:
     return {parameter.name: parameter.default for parameter in get_strategy_config(strategy_key).parameters}
+
+
+def strategy_metadata_frame(strategy_key: str) -> pd.DataFrame:
+    config = get_strategy_config(strategy_key)
+    return pd.DataFrame(
+        [
+            {"campo": "Categoria", "valor": config.category},
+            {"campo": "Regimen esperado", "valor": config.expected_market_regime},
+            {"campo": "Complejidad", "valor": config.complexity_level},
+            {"campo": "Modos de falla", "valor": "; ".join(config.failure_modes)},
+            {"campo": "Tests recomendados", "valor": "; ".join(config.recommended_tests)},
+        ]
+    )
 
 
 def validate_strategy_parameters(

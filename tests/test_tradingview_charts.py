@@ -58,9 +58,40 @@ def test_build_equity_drawdown_chart_html_contains_benchmark_and_drawdown():
     assert "addAreaSeries" in html
     assert "Equity estrategia" in html
     assert "Benchmark / buy and hold" in html
-    assert "Drawdown (escala lineal" in html
+    assert "Drawdown (escala lineal, % negativos)" in html
     assert '"logScale": true' in html
     assert "createBaseChart(payload.drawdownId, payload.drawdownHeight, false)" in html
+    assert '"value": -4.5' in html
+    assert "formatter: (price) => `${price.toFixed(1)}%`" in html
+
+
+def test_build_equity_drawdown_chart_html_scales_fractional_drawdown_to_percent_points():
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=2, freq="D"),
+            "equity": [1000, 448.1],
+            "drawdown": [0.0, -0.5519],
+        }
+    )
+
+    html = build_equity_drawdown_chart_html(frame, title="Drawdown")
+
+    assert '"value": -55.19' in html
+
+
+def test_build_equity_drawdown_chart_html_keeps_percent_point_drawdown_scale():
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=2, freq="D"),
+            "equity": [1000, 500],
+            "drawdown": [0.0, -50.0],
+        }
+    )
+
+    html = build_equity_drawdown_chart_html(frame, title="Drawdown")
+
+    assert '"value": -50.0' in html
+    assert '"value": -5000.0' not in html
 
 
 def test_build_line_comparison_chart_html_supports_datetime_index():
