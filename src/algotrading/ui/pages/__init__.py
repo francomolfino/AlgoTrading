@@ -5,6 +5,7 @@ from algotrading.ui.pages.research import (
     render_backtest_runner,
     render_data_manager,
     render_experiment_explorer,
+    render_guided_workflow,
     render_home,
     render_paper_trading_simulator,
     render_placeholder,
@@ -21,6 +22,7 @@ from algotrading.ui.pages.research import (
 
 PAGE_RENDERERS = {
     "Home / Overview": render_home,
+    "Nuevo experimento guiado": render_guided_workflow,
     "Data Manager": render_data_manager,
     "Strategy Lab": render_strategy_lab,
     "Backtest Runner": render_backtest_runner,

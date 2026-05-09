@@ -21,6 +21,7 @@ from algotrading.ui.adapters.data_adapter import (
     download_and_save,
     list_data_assets,
     load_data_file,
+    load_symbol_data,
     parse_symbols,
     quality_report_frame,
     validate_data_quality,
@@ -39,6 +40,16 @@ from algotrading.ui.adapters.experiment_adapter import (
     load_experiment_details,
     records_frame,
     sort_records,
+)
+from algotrading.ui.adapters.guided_adapter import (
+    GUIDED_WORKFLOW_STEPS,
+    ExperimentDraft,
+    build_draft_backtest_request,
+    build_draft_robustness_request,
+    guided_step_label,
+    new_experiment_draft,
+    recommend_journal_status,
+    update_experiment_draft,
 )
 from algotrading.ui.adapters.journal_adapter import (
     RESEARCH_NOTE_STATUSES,
@@ -94,7 +105,7 @@ from algotrading.ui.adapters.evidence_adapter import (
     build_evidence_score_from_result,
 )
 from algotrading.ui.components.evidence_score import render_evidence_score
-from algotrading.ui.components.navigation import nav_button as _nav_button
+from algotrading.ui.components.navigation import go_to_page as _go_to_page, nav_button as _nav_button
 from algotrading.ui.components.research_verdict import render_research_verdict
 from algotrading.ui.adapters.verdict_adapter import (
     build_research_verdict_from_details,
@@ -128,12 +139,13 @@ def render_home() -> None:
     _render_next_step(data_assets, experiments)
 
     st.subheader("Accesos rapidos")
-    cols = st.columns(5)
-    _nav_button(cols[0], "Descargar datos", "Data Manager")
-    _nav_button(cols[1], "Correr backtest", "Backtest Runner")
-    _nav_button(cols[2], "Ver resultados", "Results Dashboard")
-    _nav_button(cols[3], "Comparar", "Experiment Explorer")
-    _nav_button(cols[4], "Paper simulado", "Paper Trading Simulator")
+    cols = st.columns(6)
+    _nav_button(cols[0], "Nuevo guiado", "Nuevo experimento guiado")
+    _nav_button(cols[1], "Descargar datos", "Data Manager")
+    _nav_button(cols[2], "Correr backtest", "Backtest Runner")
+    _nav_button(cols[3], "Ver resultados", "Results Dashboard")
+    _nav_button(cols[4], "Comparar", "Experiment Explorer")
+    _nav_button(cols[5], "Paper simulado", "Paper Trading Simulator")
 
     st.subheader("Flujo recomendado")
     _render_bullets(RESEARCH_FLOW_STEPS)
@@ -143,6 +155,418 @@ def render_home() -> None:
         st.dataframe(records_frame(experiments[:5]), width="stretch", hide_index=True)
     else:
         st.info("Todavia no hay experimentos guardados.")
+
+
+def render_guided_workflow() -> None:
+    st.title("Nuevo experimento guiado")
+    st.warning("Modo research educativo. No opera dinero real ni valida rentabilidad futura.")
+    st.write("Este flujo te lleva de datos a conclusion sin saltarte controles basicos.")
+
+    draft = _get_guided_draft()
+    pending_step = st.session_state.pop("pending_guided_step", None)
+    if pending_step is not None:
+        st.session_state.guided_step_selector = pending_step
+    c1, c2 = st.columns([3, 1])
+    selected_step = c1.radio(
+        "Paso",
+        list(range(1, len(GUIDED_WORKFLOW_STEPS) + 1)),
+        index=draft.step - 1,
+        format_func=guided_step_label,
+        horizontal=True,
+        key="guided_step_selector",
+    )
+    if selected_step != draft.step:
+        _set_guided_draft(update_experiment_draft(draft, step=selected_step))
+        st.rerun()
+    if c2.button("Reiniciar draft", width="stretch"):
+        _set_guided_draft(new_experiment_draft(st.session_state.interval))
+        st.rerun()
+
+    st.progress(draft.step / len(GUIDED_WORKFLOW_STEPS), text=guided_step_label(draft.step))
+    renderers = {
+        1: _render_guided_data_step,
+        2: _render_guided_strategy_step,
+        3: _render_guided_backtest_config_step,
+        4: _render_guided_execute_step,
+        5: _render_guided_review_step,
+        6: _render_guided_robustness_step,
+        7: _render_guided_journal_step,
+    }
+    renderers[draft.step](draft)
+
+
+def _render_guided_data_step(draft: ExperimentDraft) -> None:
+    st.subheader("1. Seleccionar/validar datos")
+    assets = list_data_assets(st.session_state.data_dir, st.session_state.interval)
+    if not assets:
+        st.info("No encontre datos locales para el timeframe actual. Descarga datos antes de crear el experimento.")
+        if st.button("Ir a Data Manager"):
+            _go_to_page("Data Manager")
+        return
+
+    asset = st.selectbox(
+        "Activo local",
+        assets,
+        index=_asset_index(assets, draft.symbol),
+        format_func=lambda item: f"{item.symbol_hint} ({item.interval}, {item.rows} filas)",
+        help=TOOLTIPS["ticker"],
+        key="guided_asset_select",
+    )
+    try:
+        frame = load_data_file(asset.path)
+        report = validate_data_quality(frame)
+    except Exception as exc:
+        _show_error(exc)
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Filas", report.rows)
+    c2.metric("Inicio", report.start_date)
+    c3.metric("Fin", report.end_date)
+    c4.metric("Estado", "ok" if report.is_valid else "revisar")
+    st.dataframe(quality_report_frame(report), width="stretch", hide_index=True)
+    _render_data_quality_reading(report)
+
+    price_column = "adj_close" if "adj_close" in frame else "close"
+    render_price_volume_chart(
+        frame.tail(500),
+        title=f"{asset.symbol_hint} - ultimas barras disponibles",
+        price_column=price_column,
+        height=430,
+    )
+    if st.button("Usar estos datos y continuar", type="primary", disabled=not report.is_valid):
+        _set_guided_draft(
+            update_experiment_draft(
+                draft,
+                symbol=asset.symbol_hint,
+                interval=asset.interval,
+                price_column=price_column,
+                experiment_name=f"guided_{asset.symbol_hint}_{draft.strategy_key}",
+                backtest_request=None,
+                backtest_artifacts=None,
+                robustness_request=None,
+                robustness_result=None,
+                step=2,
+            )
+        )
+        st.rerun()
+
+
+def _render_guided_strategy_step(draft: ExperimentDraft) -> None:
+    st.subheader("2. Elegir estrategia")
+    strategy_keys = list(STRATEGIES)
+    strategy_key = st.selectbox(
+        "Estrategia",
+        strategy_keys,
+        index=_strategy_index(strategy_keys, draft.strategy_key),
+        format_func=lambda key: STRATEGIES[key].label,
+        key="guided_strategy_select",
+    )
+    config = get_strategy_config(strategy_key)
+    st.write(config.description)
+    st.caption(config.risk_note)
+    _render_strategy_research_metadata(strategy_key)
+    parameters = _render_strategy_parameters(strategy_key, "guided_strategy")
+
+    if draft.symbol:
+        try:
+            frame, _ = load_symbol_data(st.session_state.data_dir, draft.symbol, draft.interval)
+            warnings = validate_strategy_parameters(strategy_key, parameters, frame_length=len(frame))
+            for warning in warnings:
+                st.warning(warning)
+            signal_frame = generate_strategy_signals(frame, strategy_key, parameters, price_column=draft.price_column)
+            summary = signal_summary(signal_frame)
+            cols = st.columns(4)
+            cols[0].metric("Entradas", summary["entries"])
+            cols[1].metric("Salidas", summary["exits"])
+            cols[2].metric("Barras long", summary["bars_in_market"])
+            cols[3].metric("Exposicion", f"{summary['exposure_ratio']:.1%}")
+            _render_signal_reading(strategy_key, summary, len(signal_frame))
+        except Exception as exc:
+            _show_error(exc)
+            return
+
+    if st.button("Usar estrategia y continuar", type="primary"):
+        try:
+            validate_strategy_parameters(strategy_key, parameters)
+        except Exception as exc:
+            _show_error(exc)
+            return
+        _set_guided_draft(
+            update_experiment_draft(
+                draft,
+                strategy_key=strategy_key,
+                strategy_parameters=parameters,
+                experiment_name=f"guided_{draft.symbol or 'asset'}_{strategy_key}",
+                backtest_request=None,
+                backtest_artifacts=None,
+                robustness_request=None,
+                robustness_result=None,
+                step=3,
+            )
+        )
+        st.rerun()
+
+
+def _render_guided_backtest_config_step(draft: ExperimentDraft) -> None:
+    st.subheader("3. Configurar backtest")
+    if not draft.symbol:
+        st.warning("Primero selecciona datos.")
+        if st.button("Volver a datos"):
+            _set_guided_draft(update_experiment_draft(draft, step=1))
+            st.rerun()
+        return
+
+    with st.form("guided_backtest_config_form"):
+        c1, c2, c3 = st.columns(3)
+        price_column = c1.selectbox(
+            "Precio",
+            ["adj_close", "close"],
+            index=0 if draft.price_column == "adj_close" else 1,
+            help=TOOLTIPS["adjusted_close"],
+        )
+        initial_capital = c2.number_input("Capital inicial", min_value=100.0, value=float(draft.initial_capital), step=500.0, help=TOOLTIPS["capital"])
+        experiment_name = c3.text_input("Nombre experimento", value=draft.experiment_name)
+
+        c4, c5 = st.columns(2)
+        commission_bps = c4.number_input("Comision bps", min_value=0.0, value=float(draft.commission_bps), step=0.5, help=TOOLTIPS["commission"])
+        slippage_bps = c5.number_input("Slippage bps", min_value=0.0, value=float(draft.slippage_bps), step=0.5, help=TOOLTIPS["slippage"])
+
+        d1, d2 = st.columns(2)
+        use_start = d1.checkbox("Filtrar inicio", value=draft.start is not None)
+        start = d1.date_input("Inicio", value=pd.Timestamp(draft.start or "2018-01-01"), disabled=not use_start)
+        use_end = d2.checkbox("Filtrar fin", value=draft.end is not None)
+        end = d2.date_input("Fin", value=pd.Timestamp(draft.end or pd.Timestamp.today()), disabled=not use_end)
+        risk = _render_risk_settings("guided_risk")
+        notes = st.text_area("Notas iniciales", value=draft.notes, help="Hipotesis o contexto antes de mirar resultados.")
+        submitted = st.form_submit_button("Validar y continuar")
+
+    if submitted:
+        configured = update_experiment_draft(
+            draft,
+            price_column=price_column,
+            initial_capital=float(initial_capital),
+            commission_bps=float(commission_bps),
+            slippage_bps=float(slippage_bps),
+            start=str(start) if use_start else None,
+            end=str(end) if use_end else None,
+            risk=risk,
+            experiment_name=experiment_name,
+            notes=notes,
+        )
+        try:
+            request = build_draft_backtest_request(
+                configured,
+                data_dir=st.session_state.data_dir,
+                experiments_root=st.session_state.experiments_dir,
+            )
+            preflight = preflight_backtest_request(request)
+            _render_backtest_preflight(preflight)
+            if not preflight.can_run:
+                st.error("Corregi los errores bloqueantes antes de ejecutar.")
+                return
+            _set_guided_draft(update_experiment_draft(configured, backtest_request=request, step=4))
+            st.rerun()
+        except Exception as exc:
+            _show_error(exc)
+
+
+def _render_guided_execute_step(draft: ExperimentDraft) -> None:
+    st.subheader("4. Ejecutar")
+    if draft.backtest_request is None:
+        st.warning("Primero valida la configuracion del backtest.")
+        if st.button("Volver a configuracion"):
+            _set_guided_draft(update_experiment_draft(draft, step=3))
+            st.rerun()
+        return
+
+    st.write(f"Activo: `{draft.backtest_request.symbol}`")
+    st.write(f"Estrategia: `{STRATEGIES[draft.backtest_request.strategy_key].label}`")
+    st.write(f"Experimento: `{draft.backtest_request.experiment_name}`")
+    st.caption("El experimento guiado se guarda siempre para poder adjuntar journal al final.")
+    if st.button("Ejecutar backtest", type="primary"):
+        try:
+            with st.spinner("Ejecutando backtest guiado..."):
+                artifacts = run_backtest_request(draft.backtest_request)
+            st.session_state.latest_backtest = artifacts
+            _set_guided_draft(update_experiment_draft(draft, backtest_artifacts=artifacts, step=5))
+            st.rerun()
+        except Exception as exc:
+            _show_error(exc)
+
+
+def _render_guided_review_step(draft: ExperimentDraft) -> None:
+    st.subheader("5. Revisar resultados")
+    if draft.backtest_artifacts is None:
+        st.warning("Todavia no hay resultado para revisar.")
+        if st.button("Volver a ejecutar"):
+            _set_guided_draft(update_experiment_draft(draft, step=4))
+            st.rerun()
+        return
+
+    _render_backtest_result(draft.backtest_artifacts)
+    c1, c2 = st.columns(2)
+    if c1.button("Continuar a robustez", type="primary", width="stretch"):
+        _set_guided_draft(update_experiment_draft(draft, step=6))
+        st.rerun()
+    if c2.button("Saltar a notas", width="stretch"):
+        _set_guided_draft(update_experiment_draft(draft, step=7))
+        st.rerun()
+
+
+def _render_guided_robustness_step(draft: ExperimentDraft) -> None:
+    st.subheader("6. Correr robustez")
+    if draft.backtest_artifacts is None:
+        st.warning("Corre el backtest antes de evaluar robustez.")
+        return
+
+    assets = list_data_assets(st.session_state.data_dir, draft.interval)
+    default_assets = [asset for asset in assets if asset.symbol_hint == draft.symbol] or assets[:1]
+    selected_assets = st.multiselect(
+        "Activos para robustez",
+        assets,
+        default=default_assets,
+        format_func=lambda asset: asset.symbol_hint,
+        help="Inclui mas activos si existen datos locales compatibles.",
+    )
+    with st.form("guided_robustness_form"):
+        c1, c2, c3 = st.columns(3)
+        train_ratio = c1.slider("Train ratio", 0.1, 0.9, 0.7, 0.05, help=TOOLTIPS["in_sample"])
+        run_wf = c2.checkbox("Walk-forward", value=True, help=TOOLTIPS["walk_forward"])
+        run_regimes = c3.checkbox("Regimenes", value=True, help="Evalua anos contiguos bull/bear y high/low vol.")
+        r1, r2, r3, r4 = st.columns(4)
+        wf_train = r1.number_input("WF train rows", min_value=2, value=756, step=21, disabled=not run_wf)
+        wf_test = r2.number_input("WF test rows", min_value=2, value=252, step=21, disabled=not run_wf)
+        wf_step = r3.number_input("WF step rows", min_value=1, value=252, step=21, disabled=not run_wf)
+        regime_min = r4.number_input("Min filas/regimen", min_value=2, value=60, step=10, disabled=not run_regimes)
+        submitted = st.form_submit_button("Correr robustez")
+
+    if submitted:
+        try:
+            request = build_draft_robustness_request(
+                draft,
+                symbols=tuple(asset.symbol_hint for asset in selected_assets),
+                data_dir=st.session_state.data_dir,
+                train_ratio=float(train_ratio),
+                run_walk_forward=run_wf,
+                run_regime_analysis=run_regimes,
+                wf_train_rows=int(wf_train),
+                wf_test_rows=int(wf_test),
+                wf_step_rows=int(wf_step),
+                regime_min_rows=int(regime_min),
+            )
+            with st.spinner("Corriendo robustez guiada..."):
+                result = run_robustness_request(request)
+            st.session_state.latest_robustness = result
+            st.session_state.latest_robustness_request = request
+            st.session_state.latest_robustness_experiment = str(draft.backtest_artifacts.experiment_dir or "")
+            suggested_status = recommend_journal_status(
+                robustness_result=result,
+                fallback=draft.journal_status,
+            )
+            _set_guided_draft(
+                update_experiment_draft(
+                    draft,
+                    robustness_request=request,
+                    robustness_result=result,
+                    journal_status=suggested_status,
+                    step=7,
+                )
+            )
+            st.rerun()
+        except Exception as exc:
+            _show_error(exc)
+
+    if draft.robustness_result is not None:
+        st.warning(robustness_comment(draft.robustness_result.diagnostics))
+        st.dataframe(draft.robustness_result.diagnostics, width="stretch", hide_index=True)
+
+
+def _render_guided_journal_step(draft: ExperimentDraft) -> None:
+    st.subheader("7. Guardar notas/conclusion")
+    artifacts = draft.backtest_artifacts
+    if artifacts is None or artifacts.experiment_dir is None:
+        st.warning("No hay experimento guardado para adjuntar notas.")
+        return
+
+    saved_notes = load_research_notes(artifacts.experiment_dir)
+    matched_robustness = draft.robustness_result or _matching_robustness(
+        draft.strategy_key,
+        draft.strategy_parameters,
+        draft.symbol,
+    )
+    matched_stress = _matching_stress_test(
+        draft.strategy_key,
+        draft.strategy_parameters,
+        draft.symbol,
+        interval=draft.interval,
+        start=draft.start,
+        end=draft.end,
+    )
+    suggested_status = recommend_journal_status(
+        robustness_result=matched_robustness,
+        stress_result=matched_stress,
+        fallback=draft.journal_status if draft.journal_status in RESEARCH_NOTE_STATUSES else "Needs Review",
+    )
+    current_status = saved_notes.status
+    if saved_notes.status in {"Draft", "Needs Review"} and suggested_status in RESEARCH_NOTE_STATUSES:
+        current_status = suggested_status
+    elif draft.journal_status in RESEARCH_NOTE_STATUSES and saved_notes.status == "Draft":
+        current_status = draft.journal_status
+    st.info(
+        f"Estado sugerido por la evidencia disponible: **{suggested_status}**. "
+        "Es una ayuda editorial: revisa metricas, benchmark y notas antes de guardar."
+    )
+    with st.form("guided_journal_form"):
+        c1, c2 = st.columns([2, 1])
+        status = c1.selectbox(
+            "Estado",
+            RESEARCH_NOTE_STATUSES,
+            index=RESEARCH_NOTE_STATUSES.index(current_status),
+            help="Estado editorial del experimento. No cambia metricas.",
+        )
+        favorite = c2.checkbox("Favorito", value=draft.favorite or saved_notes.favorite)
+        tags_text = st.text_input("Tags", value=tags_to_text(draft.tags or saved_notes.tags))
+        hypothesis = st.text_area("Hipotesis", value=draft.hypothesis or saved_notes.hypothesis, height=90)
+        conclusion = st.text_area("Conclusion", value=draft.conclusion or saved_notes.conclusion, height=100)
+        next_test = st.text_area("Proximo test", value=draft.next_test or saved_notes.next_test, height=80)
+        submitted = st.form_submit_button("Guardar notas y finalizar")
+
+    if submitted:
+        try:
+            notes = ResearchNotes(
+                status=status,
+                hypothesis=hypothesis,
+                conclusion=conclusion,
+                next_test=next_test,
+                tags=parse_tags(tags_text),
+                favorite=favorite,
+            )
+            path = save_research_notes(artifacts.experiment_dir, notes)
+            _set_guided_draft(
+                update_experiment_draft(
+                    draft,
+                    journal_status=status,
+                    hypothesis=hypothesis,
+                    conclusion=conclusion,
+                    next_test=next_test,
+                    tags=parse_tags(tags_text),
+                    favorite=favorite,
+                    journal_saved_path=path,
+                )
+            )
+            st.success(f"Notas guardadas en `{path}`")
+        except Exception as exc:
+            _show_error(exc)
+
+    if draft.journal_saved_path:
+        st.success(f"Workflow completo. Journal: `{draft.journal_saved_path}`")
+    c1, c2 = st.columns(2)
+    if c1.button("Abrir Experiment Explorer", width="stretch"):
+        _go_to_page("Experiment Explorer")
+    if c2.button("Crear otro experimento", width="stretch"):
+        _set_guided_draft(new_experiment_draft(st.session_state.interval))
+        st.rerun()
 
 
 def render_data_manager() -> None:
@@ -548,39 +972,109 @@ def render_robustness_lab() -> None:
     st.title("Robustness Lab")
     st.caption("Train/test, walk-forward y diagnostico critico contra buy and hold.")
     st.info("Robustez no busca el mejor numero: busca detectar fragilidad, dependencia de periodo y posible overfitting.")
-    assets = list_data_assets(st.session_state.data_dir, st.session_state.interval)
-    if len(assets) < 1:
-        st.info("Primero carga datos en Data Manager.")
-        return
-    selected_assets = st.multiselect(
-        "Activos",
-        assets,
-        default=assets[:1],
-        format_func=lambda asset: asset.symbol_hint,
-        help="Probar varios activos reduce autoengano de un caso aislado.",
+
+    records = list_experiments(st.session_state.experiments_dir)
+    source = st.radio(
+        "Fuente de configuracion",
+        ["Desde experimento guardado", "Manual"],
+        index=0 if records else 1,
+        horizontal=True,
+        help="Usa un experimento guardado para que Results Dashboard pueda reconocer la robustez corrida sobre la misma configuracion.",
     )
-    strategy_key = _strategy_selector("robustness_strategy")
-    parameters = _render_strategy_parameters(strategy_key, "robustness")
+    selected_record = None
+    data_dir = st.session_state.data_dir
+    interval = st.session_state.interval
+    start = None
+    end = None
+    price_column = "adj_close"
+    initial_capital_default = 10_000.0
+    commission_bps = 1.0
+    slippage_bps = 2.0
+
+    if source == "Desde experimento guardado":
+        selected_record = _experiment_selector("robustness_source_experiment")
+        if selected_record is None:
+            st.info("Primero corre y guarda un backtest. Luego podes validar ese experimento aca.")
+            return
+        details = load_experiment_details(selected_record.path)
+        defaults = _experiment_request_defaults(details)
+        data_dir = defaults["data_dir"]
+        interval = defaults["interval"]
+        start = defaults["start"]
+        end = defaults["end"]
+        price_column = defaults["price_column"]
+        strategy_key = defaults["strategy_key"]
+        parameters = defaults["strategy_parameters"]
+        initial_capital_default = defaults["initial_capital"]
+        commission_bps = defaults["commission_bps"]
+        slippage_bps = defaults["slippage_bps"]
+        if strategy_key not in STRATEGIES:
+            st.error(f"La estrategia guardada `{strategy_key}` no esta disponible en el registry actual.")
+            return
+        _render_experiment_config_summary(selected_record, defaults)
+        _render_strategy_research_metadata(strategy_key)
+        assets = list_data_assets(data_dir, interval)
+        default_symbols = set(defaults["symbols"] or ((defaults["symbol"],) if defaults["symbol"] else ()))
+        default_assets = [asset for asset in assets if asset.symbol_hint in default_symbols] or assets[:1]
+        selected_assets = st.multiselect(
+            "Activos para validar",
+            assets,
+            default=default_assets,
+            format_func=lambda asset: asset.symbol_hint,
+            help="El activo original viene seleccionado. Agregar activos permite revisar si la idea depende de un unico caso.",
+            key="robustness_experiment_assets",
+        )
+    else:
+        assets = list_data_assets(data_dir, interval)
+        if len(assets) < 1:
+            st.info("Primero carga datos en Data Manager.")
+            return
+        selected_assets = st.multiselect(
+            "Activos",
+            assets,
+            default=assets[:1],
+            format_func=lambda asset: asset.symbol_hint,
+            help="Probar varios activos reduce autoengano de un caso aislado.",
+            key="robustness_manual_assets",
+        )
+        strategy_key = _strategy_selector("robustness_strategy")
+        parameters = _render_strategy_parameters(strategy_key, "robustness")
+
     c1, c2, c3 = st.columns(3)
     train_ratio = c1.slider("Train ratio", 0.1, 0.9, 0.7, 0.05, help=TOOLTIPS["in_sample"])
     run_wf = c2.checkbox("Walk-forward", value=False, help=TOOLTIPS["walk_forward"])
     run_regimes = c3.checkbox("Regimenes", value=True, help="Evalua anos contiguos clasificados como bull/bear y high/low vol.")
     wf1, wf2, wf3, wf4 = st.columns(4)
-    initial_capital = wf1.number_input("Capital inicial", min_value=100.0, value=10_000.0, step=500.0)
+    robustness_key = selected_record.run_id if selected_record else "manual"
+    initial_capital = wf1.number_input(
+        "Capital inicial",
+        min_value=100.0,
+        value=float(initial_capital_default),
+        step=500.0,
+        key=f"robustness_initial_capital_{robustness_key}",
+    )
     wf_train = wf1.number_input("WF train rows", min_value=2, value=756, step=21, disabled=not run_wf)
     wf_test = wf2.number_input("WF test rows", min_value=2, value=252, step=21, disabled=not run_wf)
     wf_step = wf3.number_input("WF step rows", min_value=1, value=252, step=21, disabled=not run_wf)
     regime_min_rows = wf4.number_input("Min filas/regimen", min_value=2, value=60, step=10, disabled=not run_regimes)
 
     if st.button("Correr robustez", type="primary"):
+        if not selected_assets:
+            st.error("Selecciona al menos un activo.")
+            return
         try:
             request = RobustnessRequest(
                 symbols=tuple(asset.symbol_hint for asset in selected_assets),
                 strategy_key=strategy_key,
                 strategy_parameters=parameters,
-                data_dir=st.session_state.data_dir,
-                interval=st.session_state.interval,
+                data_dir=data_dir,
+                interval=interval,
+                start=start,
+                end=end,
+                price_column=price_column,
                 initial_capital=float(initial_capital),
+                commission_bps=float(commission_bps),
+                slippage_bps=float(slippage_bps),
                 train_ratio=float(train_ratio),
                 run_walk_forward=run_wf,
                 run_regime_analysis=run_regimes,
@@ -593,6 +1087,7 @@ def render_robustness_lab() -> None:
                 result = run_robustness_request(request)
             st.session_state.latest_robustness = result
             st.session_state.latest_robustness_request = request
+            st.session_state.latest_robustness_experiment = str(selected_record.path) if selected_record else ""
         except Exception as exc:
             _show_error(exc)
             return
@@ -600,6 +1095,9 @@ def render_robustness_lab() -> None:
     result = st.session_state.get("latest_robustness")
     if result is None:
         return
+    linked_experiment = st.session_state.get("latest_robustness_experiment")
+    if linked_experiment:
+        st.caption(f"Robustez asociada a experimento: `{linked_experiment}`")
     st.subheader("Comentario critico")
     st.warning(robustness_comment(result.diagnostics))
     st.subheader("Diagnostico")
@@ -613,6 +1111,7 @@ def render_robustness_lab() -> None:
         st.subheader("Regimenes de mercado")
         st.warning(regime_comment(result.regimes))
         st.dataframe(result.regimes, width="stretch", hide_index=True)
+    _render_linked_journal_status_action(linked_experiment, "robustness")
 
 
 def render_stress_tests() -> None:
@@ -620,44 +1119,116 @@ def render_stress_tests() -> None:
     st.caption("Pruebas adversas para ver si un resultado depende de supuestos optimistas o pocos eventos.")
     st.warning("Stress testing sigue siendo research. No valida rentabilidad futura ni habilita trading real.")
 
-    asset = _asset_selector("stress_asset")
-    if asset is None:
-        st.info("Primero carga datos en Data Manager.")
-        return
+    records = list_experiments(st.session_state.experiments_dir)
+    source = st.radio(
+        "Fuente de configuracion",
+        ["Desde experimento guardado", "Manual"],
+        index=0 if records else 1,
+        horizontal=True,
+        help="Para validar un backtest concreto, carga el experimento guardado y evita reconstruir parametros a mano.",
+        key="stress_source_mode",
+    )
+    selected_record = None
+    data_dir = st.session_state.data_dir
+    interval = st.session_state.interval
+    start_default = None
+    end_default = None
+    price_column_default = "adj_close"
+    initial_capital_default = 10_000.0
+    commission_default = 1.0
+    slippage_default = 2.0
 
-    strategy_key = _strategy_selector("stress_strategy")
-    _render_strategy_research_metadata(strategy_key)
-    parameters = _render_strategy_parameters(strategy_key, "stress")
+    if source == "Desde experimento guardado":
+        selected_record = _experiment_selector("stress_source_experiment")
+        if selected_record is None:
+            st.info("Primero corre y guarda un backtest. Luego podes aplicar stress tests sobre ese experimento.")
+            return
+        details = load_experiment_details(selected_record.path)
+        defaults = _experiment_request_defaults(details)
+        data_dir = defaults["data_dir"]
+        interval = defaults["interval"]
+        symbol = defaults["symbol"] or (defaults["symbols"][0] if defaults["symbols"] else None)
+        start_default = defaults["start"]
+        end_default = defaults["end"]
+        price_column_default = defaults["price_column"]
+        strategy_key = defaults["strategy_key"]
+        parameters = defaults["strategy_parameters"]
+        initial_capital_default = defaults["initial_capital"]
+        commission_default = defaults["commission_bps"]
+        slippage_default = defaults["slippage_bps"]
+        if not symbol:
+            st.error("El experimento no tiene activo asociado.")
+            return
+        if strategy_key not in STRATEGIES:
+            st.error(f"La estrategia guardada `{strategy_key}` no esta disponible en el registry actual.")
+            return
+        _render_experiment_config_summary(selected_record, defaults)
+        _render_strategy_research_metadata(strategy_key)
+    else:
+        asset = _asset_selector("stress_asset")
+        if asset is None:
+            st.info("Primero carga datos en Data Manager.")
+            return
+        symbol = asset.symbol_hint
+        interval = asset.interval
+        strategy_key = _strategy_selector("stress_strategy")
+        _render_strategy_research_metadata(strategy_key)
+        parameters = _render_strategy_parameters(strategy_key, "stress")
 
+    stress_key = selected_record.run_id if selected_record else f"manual_{symbol}_{strategy_key}"
     with st.form("stress_form"):
         st.subheader("Supuestos base")
         c1, c2, c3, c4 = st.columns(4)
-        initial_capital = c1.number_input("Capital inicial", min_value=100.0, value=10_000.0, step=500.0, help=TOOLTIPS["capital"])
-        commission_bps = c2.number_input("Comision bps", min_value=0.0, value=1.0, step=0.5, help=TOOLTIPS["commission"])
-        slippage_bps = c3.number_input("Slippage bps", min_value=0.0, value=2.0, step=0.5, help=TOOLTIPS["slippage"])
+        initial_capital = c1.number_input(
+            "Capital inicial",
+            min_value=100.0,
+            value=float(initial_capital_default),
+            step=500.0,
+            help=TOOLTIPS["capital"],
+            key=f"stress_initial_capital_{stress_key}",
+        )
+        commission_bps = c2.number_input(
+            "Comision bps",
+            min_value=0.0,
+            value=float(commission_default),
+            step=0.5,
+            help=TOOLTIPS["commission"],
+            key=f"stress_commission_{stress_key}",
+        )
+        slippage_bps = c3.number_input(
+            "Slippage bps",
+            min_value=0.0,
+            value=float(slippage_default),
+            step=0.5,
+            help=TOOLTIPS["slippage"],
+            key=f"stress_slippage_{stress_key}",
+        )
         remove_best_trades = c4.number_input(
             "Quitar mejores trades",
             min_value=0,
             value=3,
             step=1,
             help="Shock post-hoc: resta los mejores PnL para medir dependencia de pocos trades.",
+            key=f"stress_remove_best_{stress_key}",
         )
 
         d1, d2, d3 = st.columns(3)
-        price_column = d1.selectbox("Precio", ["adj_close", "close"], index=0, help=TOOLTIPS["adjusted_close"])
-        use_start = d2.checkbox("Filtrar inicio", value=False)
-        start = d2.date_input("Inicio", value=pd.Timestamp("2018-01-01"), disabled=not use_start)
-        use_end = d3.checkbox("Filtrar fin", value=False)
-        end = d3.date_input("Fin", value=pd.Timestamp.today(), disabled=not use_end)
+        price_options = ["adj_close", "close"]
+        price_index = 0 if price_column_default not in price_options else price_options.index(price_column_default)
+        price_column = d1.selectbox("Precio", price_options, index=price_index, help=TOOLTIPS["adjusted_close"], key=f"stress_price_{stress_key}")
+        use_start = d2.checkbox("Filtrar inicio", value=start_default is not None, key=f"stress_use_start_{stress_key}")
+        start = d2.date_input("Inicio", value=pd.Timestamp(start_default or "2018-01-01"), disabled=not use_start, key=f"stress_start_{stress_key}")
+        use_end = d3.checkbox("Filtrar fin", value=end_default is not None, key=f"stress_use_end_{stress_key}")
+        end = d3.date_input("Fin", value=pd.Timestamp(end_default or pd.Timestamp.today()), disabled=not use_end, key=f"stress_end_{stress_key}")
         submitted = st.form_submit_button("Correr stress tests")
 
     if submitted:
         request = StressTestRequest(
-            symbol=asset.symbol_hint,
+            symbol=symbol,
             strategy_key=strategy_key,
             strategy_parameters=parameters,
-            data_dir=st.session_state.data_dir,
-            interval=asset.interval,
+            data_dir=data_dir,
+            interval=interval,
             start=str(start) if use_start else None,
             end=str(end) if use_end else None,
             price_column=price_column,
@@ -670,6 +1241,7 @@ def render_stress_tests() -> None:
             with st.spinner("Corriendo escenarios adversos..."):
                 result = run_stress_test_request(request)
             st.session_state.latest_stress_test = result
+            st.session_state.latest_stress_experiment = str(selected_record.path) if selected_record else ""
         except Exception as exc:
             _show_error(exc)
             return
@@ -678,7 +1250,11 @@ def render_stress_tests() -> None:
     if result is None:
         st.info("Configura una estrategia y corre el primer stress test.")
         return
+    linked_experiment = st.session_state.get("latest_stress_experiment")
+    if linked_experiment:
+        st.caption(f"Stress test asociado a experimento: `{linked_experiment}`")
     _render_stress_result(result)
+    _render_linked_journal_status_action(linked_experiment, "stress")
 
 
 def render_portfolio_lab() -> None:
@@ -1258,6 +1834,132 @@ def _render_strategy_research_metadata(strategy_key: str) -> None:
         st.dataframe(strategy_metadata_frame(strategy_key), width="stretch", hide_index=True)
 
 
+def _experiment_request_defaults(details: ExperimentDetails) -> dict:
+    config = details.config if isinstance(details.config, dict) else {}
+    strategy_config = config.get("strategy", {})
+    backtest_config = config.get("backtest", {})
+    if not isinstance(strategy_config, dict):
+        strategy_config = {}
+    if not isinstance(backtest_config, dict):
+        backtest_config = {}
+
+    symbols = tuple(str(symbol) for symbol in (config.get("symbols") or []) if str(symbol))
+    strategy_parameters = strategy_config.get("parameters", {})
+    if not isinstance(strategy_parameters, dict):
+        strategy_parameters = {}
+
+    return {
+        "symbol": details.symbol,
+        "symbols": symbols,
+        "data_dir": Path(str(config.get("data_dir", st.session_state.data_dir))),
+        "interval": str(config.get("interval", st.session_state.interval)),
+        "start": _optional_config_text(config.get("start")),
+        "end": _optional_config_text(config.get("end")),
+        "price_column": str(config.get("price_column", "adj_close")),
+        "strategy_key": str(strategy_config.get("name", "")),
+        "strategy_parameters": strategy_parameters,
+        "initial_capital": _config_float(backtest_config, "initial_capital", 10_000.0),
+        "commission_bps": _config_float(backtest_config, "commission_bps", 1.0),
+        "slippage_bps": _config_float(backtest_config, "slippage_bps", 2.0),
+    }
+
+
+def _render_experiment_config_summary(record: ExperimentRecord, defaults: dict) -> None:
+    st.caption(
+        "Configuracion cargada desde experimento: "
+        f"`{record.name}` | activo `{defaults['symbol']}` | "
+        f"estrategia `{defaults['strategy_key']}` | timeframe `{defaults['interval']}`"
+    )
+    with st.expander("Ver parametros cargados", expanded=False):
+        st.json(
+            {
+                "path": str(record.path),
+                "symbols": defaults["symbols"],
+                "data_dir": str(defaults["data_dir"]),
+                "start": defaults["start"],
+                "end": defaults["end"],
+                "price_column": defaults["price_column"],
+                "strategy_parameters": defaults["strategy_parameters"],
+                "initial_capital": defaults["initial_capital"],
+                "commission_bps": defaults["commission_bps"],
+                "slippage_bps": defaults["slippage_bps"],
+            }
+        )
+
+
+def _render_linked_journal_status_action(experiment_path: str | None, key_prefix: str) -> None:
+    if not experiment_path:
+        return
+    try:
+        details = load_experiment_details(experiment_path)
+        defaults = _experiment_request_defaults(details)
+        robustness = _matching_robustness(
+            defaults["strategy_key"],
+            defaults["strategy_parameters"],
+            defaults["symbol"],
+        )
+        stress = _matching_stress_test(
+            defaults["strategy_key"],
+            defaults["strategy_parameters"],
+            defaults["symbol"],
+            interval=defaults["interval"],
+            start=defaults["start"],
+            end=defaults["end"],
+        )
+        suggested = recommend_journal_status(
+            robustness_result=robustness,
+            stress_result=stress,
+            fallback="Needs Review",
+        )
+        notes = load_research_notes(experiment_path)
+    except Exception as exc:
+        _show_error(exc)
+        return
+
+    st.divider()
+    st.subheader("Estado del journal")
+    st.caption(
+        "El estado no cambia automaticamente porque es una conclusion editorial. "
+        "La app puede sugerirlo usando robustez y stress tests conectados al experimento."
+    )
+    c1, c2 = st.columns(2)
+    c1.metric("Estado actual", notes.status)
+    c2.metric("Estado sugerido", suggested)
+    if notes.status == suggested:
+        st.success("El journal ya refleja la evidencia disponible.")
+        return
+    if notes.status not in {"Draft", "Needs Review"}:
+        st.info("No sobrescribo un estado curado manualmente. Cambialo desde Experiment Journal si queres.")
+        return
+    if st.button("Aplicar estado sugerido al journal", key=f"{key_prefix}_apply_suggested_status"):
+        path = save_research_notes(
+            experiment_path,
+            ResearchNotes(
+                status=suggested,
+                hypothesis=notes.hypothesis,
+                conclusion=notes.conclusion,
+                next_test=notes.next_test,
+                tags=notes.tags,
+                favorite=notes.favorite,
+            ),
+        )
+        st.success(f"Estado actualizado en `{path}`")
+        st.rerun()
+
+
+def _config_float(config: dict, key: str, default: float) -> float:
+    try:
+        return float(config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _optional_config_text(value: object) -> str | None:
+    if value is None or str(value).strip() == "":
+        return None
+    return str(value)
+
+
 def _render_data_quality_reading(report) -> None:
     if not report.is_valid:
         st.error("No uses estos datos para backtest hasta corregir la validacion.")
@@ -1523,6 +2225,35 @@ def _matching_stress_test(
 
 def _same_optional_date(left: object, right: object) -> bool:
     return str(left or "") == str(right or "")
+
+
+def _get_guided_draft() -> ExperimentDraft:
+    draft = st.session_state.get("experiment_draft")
+    if not isinstance(draft, ExperimentDraft):
+        draft = new_experiment_draft(st.session_state.get("interval", "1d"))
+        st.session_state.experiment_draft = draft
+    return draft
+
+
+def _set_guided_draft(draft: ExperimentDraft) -> None:
+    st.session_state.experiment_draft = draft
+    st.session_state.pending_guided_step = draft.step
+
+
+def _asset_index(assets, symbol: str | None) -> int:
+    if symbol is None:
+        return 0
+    for index, asset in enumerate(assets):
+        if asset.symbol_hint == symbol:
+            return index
+    return 0
+
+
+def _strategy_index(strategy_keys: list[str], strategy_key: str) -> int:
+    try:
+        return strategy_keys.index(strategy_key)
+    except ValueError:
+        return 0
 
 
 def _show_error(exc: Exception) -> None:

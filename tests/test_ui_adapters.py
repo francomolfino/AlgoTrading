@@ -27,6 +27,15 @@ from algotrading.ui.adapters.experiment_adapter import (
     list_experiments,
     load_experiment_details,
 )
+from algotrading.ui.adapters.guided_adapter import (
+    GUIDED_WORKFLOW_STEPS,
+    build_draft_backtest_request,
+    build_draft_robustness_request,
+    guided_step_label,
+    new_experiment_draft,
+    recommend_journal_status,
+    update_experiment_draft,
+)
 from algotrading.ui.adapters.journal_adapter import (
     DEFAULT_RESEARCH_STATUS,
     RESEARCH_NOTE_STATUSES,
@@ -170,6 +179,113 @@ def test_ui_risk_adapter_warns_on_aggressive_settings():
     )
 
     assert any("80%" in warning for warning in warnings)
+
+
+def test_guided_draft_builds_backtest_and_robustness_requests():
+    draft = new_experiment_draft(interval="1wk")
+
+    assert len(GUIDED_WORKFLOW_STEPS) == 7
+    assert guided_step_label(999).startswith("7.")
+    assert draft.step == 1
+    assert draft.strategy_key == "sma_cross"
+    assert draft.strategy_parameters == {"fast_window": 50, "slow_window": 200}
+    with pytest.raises(ValueError, match="activo"):
+        build_draft_backtest_request(draft, data_dir="data/raw", experiments_root="experiments")
+
+    configured = update_experiment_draft(
+        draft,
+        step=99,
+        symbol="SPY",
+        strategy_key="rsi",
+        strategy_parameters={"window": 14, "oversold": 30.0, "overbought": 70.0},
+        start="2020-01-01",
+        end="2023-12-31",
+        price_column="close",
+        initial_capital=25_000,
+        commission_bps=1.5,
+        slippage_bps=3.0,
+        risk=RiskSettings(position_fraction=0.5, max_total_exposure=0.75),
+        experiment_name="guided_test",
+        notes="hipotesis inicial",
+    )
+    backtest_request = build_draft_backtest_request(
+        configured,
+        data_dir="data/raw",
+        experiments_root="experiments",
+    )
+    robustness_request = build_draft_robustness_request(
+        configured,
+        symbols=("SPY", "QQQ"),
+        data_dir="data/raw",
+        train_ratio=0.6,
+        run_walk_forward=True,
+    )
+
+    assert draft.symbol is None
+    assert configured.step == 7
+    assert backtest_request.symbol == "SPY"
+    assert backtest_request.strategy_key == "rsi"
+    assert backtest_request.save_experiment is True
+    assert backtest_request.risk.position_fraction == 0.5
+    assert robustness_request.symbols == ("SPY", "QQQ")
+    assert robustness_request.train_ratio == 0.6
+    assert robustness_request.interval == "1wk"
+
+
+def test_guided_journal_status_is_recommended_from_robustness_and_stress():
+    robustness = RobustnessResult(
+        train_test=pd.DataFrame(),
+        walk_forward=pd.DataFrame(),
+        regimes=pd.DataFrame(),
+        diagnostics=pd.DataFrame(
+            [
+                {"symbol": "SPY", "strategy": "buy_and_hold", "flags": ""},
+                {"symbol": "SPY", "strategy": "sma_cross_50_200", "flags": ""},
+            ]
+        ),
+    )
+    weak_robustness = RobustnessResult(
+        train_test=pd.DataFrame(),
+        walk_forward=pd.DataFrame(),
+        regimes=pd.DataFrame(),
+        diagnostics=pd.DataFrame(
+            [
+                {"symbol": "SPY", "strategy": "sma_cross_50_200", "flags": "underperforms_benchmark"},
+            ]
+        ),
+    )
+    robust_stress = StressTestResult(
+        request=StressTestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 50, "slow_window": 200},
+        ),
+        scenarios=(),
+        comparison=pd.DataFrame(),
+        conclusion="Robusta",
+        flags=(),
+    )
+    fragile_stress = StressTestResult(
+        request=robust_stress.request,
+        scenarios=(),
+        comparison=pd.DataFrame(),
+        conclusion="Fragil",
+        flags=("Pocos trades: la evidencia sigue siendo fragil.",),
+    )
+    unreliable_stress = StressTestResult(
+        request=robust_stress.request,
+        scenarios=(),
+        comparison=pd.DataFrame(),
+        conclusion="No confiable",
+        flags=("Muy pocos trades.",),
+    )
+
+    assert recommend_journal_status(robustness_result=None, stress_result=None) == "Needs Review"
+    assert recommend_journal_status(robustness_result=robustness) == "Promising"
+    assert recommend_journal_status(robustness_result=robustness, stress_result=robust_stress) == "Robustness Passed"
+    assert recommend_journal_status(robustness_result=robustness, stress_result=fragile_stress) == "Needs Review"
+    assert recommend_journal_status(robustness_result=weak_robustness, stress_result=fragile_stress) == "Rejected"
+    assert recommend_journal_status(robustness_result=robustness, stress_result=unreliable_stress) == "Rejected"
 
 
 def test_ui_backtest_adapter_runs_and_saves_experiment():

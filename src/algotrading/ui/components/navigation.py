@@ -7,6 +7,7 @@ from algotrading.ui.adapters.settings_adapter import load_ui_settings
 
 PAGES = [
     "Home / Overview",
+    "Nuevo experimento guiado",
     "Data Manager",
     "Strategy Lab",
     "Backtest Runner",
