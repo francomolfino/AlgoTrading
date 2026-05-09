@@ -16,5 +16,6 @@ data/processed/*
 !data/processed/.gitkeep
 
 # Salidas locales.
-reports/
+/reports/
+/experiments/
 *.log

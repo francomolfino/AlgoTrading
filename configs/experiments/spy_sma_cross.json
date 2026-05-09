@@ -1,0 +1,24 @@
+{
+  "experiment_name": "spy_sma_cross_50_200",
+  "symbols": ["SPY"],
+  "data_dir": "data/raw",
+  "interval": "1d",
+  "price_column": "adj_close",
+  "start": "2018-01-01",
+  "end": null,
+  "output_root": "experiments",
+  "strategy": {
+    "name": "sma_cross",
+    "parameters": {
+      "fast_window": 50,
+      "slow_window": 200
+    }
+  },
+  "backtest": {
+    "initial_capital": 10000,
+    "commission_bps": 1,
+    "slippage_bps": 2,
+    "position_fraction": 1.0,
+    "close_open_position": true
+  }
+}

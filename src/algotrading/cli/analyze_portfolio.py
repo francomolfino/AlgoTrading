@@ -27,6 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval", default="1d")
     parser.add_argument("--price-column", default="adj_close", choices=("adj_close", "close"))
     parser.add_argument("--initial-capital", type=float, default=10_000.0)
+    parser.add_argument(
+        "--rebalance-frequency",
+        default="daily",
+        choices=("daily", "weekly", "monthly", "none"),
+        help="Frecuencia de rebalanceo equal-weight.",
+    )
+    parser.add_argument("--commission-bps", type=float, default=0.0)
+    parser.add_argument("--slippage-bps", type=float, default=0.0)
     parser.add_argument("--results-dir", default="reports/portfolio")
     parser.add_argument("--figures-dir", default="reports/figures")
     return parser
@@ -42,6 +50,9 @@ def main(argv: list[str] | None = None) -> int:
         frames=frames,
         initial_capital=args.initial_capital,
         price_column=args.price_column,
+        rebalance_frequency=args.rebalance_frequency,
+        commission_bps=args.commission_bps,
+        slippage_bps=args.slippage_bps,
     )
 
     label = "_".join(safe_filename_part(symbol) for symbol in args.symbols)
@@ -55,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     returns_path = results_dir / f"{base_name}_returns.csv"
     individual_equity_path = results_dir / f"{base_name}_individual_equity.csv"
     portfolio_equity_path = results_dir / f"{base_name}_equal_weight_equity.csv"
+    portfolio_orders_path = results_dir / f"{base_name}_equal_weight_orders.csv"
     correlations_path = results_dir / f"{base_name}_correlations.csv"
     summary_path = results_dir / f"{base_name}_summary.csv"
     equity_figure_path = figures_dir / f"{base_name}_portfolio_equity.png"
@@ -64,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     _save_matrix_with_date(result.return_matrix, returns_path)
     _save_matrix_with_date(result.individual_equity, individual_equity_path)
     result.portfolio_equity.to_csv(portfolio_equity_path, index=False)
+    result.portfolio_orders.to_csv(portfolio_orders_path, index=False)
     result.correlations.to_csv(correlations_path)
     result.summary.to_csv(summary_path, index=False)
 
@@ -83,7 +96,10 @@ def main(argv: list[str] | None = None) -> int:
     _print_summary(
         result.summary,
         result.correlations,
+        result.portfolio_orders,
+        args.rebalance_frequency,
         summary_path,
+        portfolio_orders_path,
         equity_figure_path,
         correlation_figure_path,
     )
@@ -111,13 +127,22 @@ def _save_matrix_with_date(frame: pd.DataFrame, path: Path) -> None:
 def _print_summary(
     summary: pd.DataFrame,
     correlations: pd.DataFrame,
+    portfolio_orders: pd.DataFrame,
+    rebalance_frequency: str,
     summary_path: Path,
+    portfolio_orders_path: Path,
     equity_figure_path: Path,
     correlation_figure_path: Path,
 ) -> None:
     print(f"[ok] resumen -> {summary_path}")
+    print(f"[ok] ordenes portfolio -> {portfolio_orders_path}")
     print(f"[ok] grafico portfolio -> {equity_figure_path}")
     print(f"[ok] grafico correlaciones -> {correlation_figure_path}")
+    total_commissions = (
+        float(portfolio_orders["commission"].sum()) if len(portfolio_orders) else 0.0
+    )
+    print(f"[ok] rebalanceo -> {rebalance_frequency}")
+    print(f"[ok] ordenes/comisiones -> {len(portfolio_orders)} / {total_commissions:.2f}")
     print("\nResumen:")
     display = summary[
         [

@@ -7,7 +7,11 @@ import pandas as pd
 
 from algotrading.backtesting import BacktestConfig
 from algotrading.data.storage import build_data_path, load_ohlcv, safe_filename_part
-from algotrading.evaluation import evaluate_train_test, evaluate_walk_forward
+from algotrading.evaluation import (
+    build_robustness_diagnostics,
+    evaluate_multi_asset_train_test,
+    evaluate_multi_asset_walk_forward,
+)
 from algotrading.strategies.registry import build_default_strategy_specs
 
 
@@ -17,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--symbol", help="Ticker ya descargado en data/raw, por ejemplo SPY.")
+    source.add_argument(
+        "--symbols",
+        nargs="+",
+        help="Tickers ya descargados para prueba multi-activo, por ejemplo SPY QQQ BTC-USD.",
+    )
     source.add_argument("--input", help="Ruta directa a un CSV/parquet OHLCV.")
     parser.add_argument("--data-dir", default="data/raw")
     parser.add_argument("--interval", default="1d")
@@ -30,6 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wf-train-rows", type=int, default=756)
     parser.add_argument("--wf-test-rows", type=int, default=252)
     parser.add_argument("--wf-step-rows", type=int, default=None)
+    parser.add_argument("--min-trades", type=int, default=5)
+    parser.add_argument("--large-gap-threshold", type=float, default=0.35)
+    parser.add_argument("--suspicious-return", type=float, default=1.0)
+    parser.add_argument("--suspicious-sharpe", type=float, default=3.0)
     parser.add_argument("--sma-fast", type=int, default=50)
     parser.add_argument("--sma-slow", type=int, default=200)
     parser.add_argument("--rsi-window", type=int, default=14)
@@ -46,13 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    input_path = Path(args.input) if args.input else _find_symbol_file(
-        data_dir=Path(args.data_dir),
-        symbol=args.symbol,
-        interval=args.interval,
-    )
-    frame = load_ohlcv(input_path)
-    label = _output_label(args.symbol, input_path)
+    frames, label = _load_frames(args)
     base_name = f"{label}_{safe_filename_part(args.interval)}"
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -78,8 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         signal_column="signal",
     )
 
-    train_test = evaluate_train_test(
-        frame=frame,
+    train_test = evaluate_multi_asset_train_test(
+        frames=frames,
         strategy_specs=specs,
         config=config,
         train_ratio=args.train_ratio,
@@ -92,9 +99,10 @@ def main(argv: list[str] | None = None) -> int:
     print("\nTrain/test:")
     _print_table(train_test)
 
+    walk_forward = None
     if args.walk_forward:
-        walk_forward = evaluate_walk_forward(
-            frame=frame,
+        walk_forward = evaluate_multi_asset_walk_forward(
+            frames=frames,
             strategy_specs=specs,
             config=config,
             train_rows=args.wf_train_rows,
@@ -108,7 +116,35 @@ def main(argv: list[str] | None = None) -> int:
         print("\nWalk-forward test agregado:")
         _print_walk_forward_aggregate(walk_forward)
 
+    diagnostics = build_robustness_diagnostics(
+        train_test=train_test,
+        walk_forward=walk_forward,
+        min_trades=args.min_trades,
+        large_gap_threshold=args.large_gap_threshold,
+        suspicious_return=args.suspicious_return,
+        suspicious_sharpe=args.suspicious_sharpe,
+    )
+    diagnostics_path = results_dir / f"{base_name}_diagnostics.csv"
+    diagnostics.to_csv(diagnostics_path, index=False)
+    print(f"\n[ok] diagnostico -> {diagnostics_path}")
+    print("\nDiagnostico:")
+    _print_diagnostics(diagnostics)
+
     return 0
+
+
+def _load_frames(args: argparse.Namespace) -> tuple[dict[str, pd.DataFrame], str]:
+    if args.input:
+        input_path = Path(args.input)
+        return {_output_label(None, input_path): load_ohlcv(input_path)}, _output_label(None, input_path)
+
+    symbols = args.symbols if args.symbols else [args.symbol]
+    frames = {
+        symbol: load_ohlcv(_find_symbol_file(Path(args.data_dir), symbol, args.interval))
+        for symbol in symbols
+    }
+    label = "_".join(safe_filename_part(symbol) for symbol in symbols)
+    return frames, label
 
 
 def _find_symbol_file(data_dir: Path, symbol: str, interval: str) -> Path:
@@ -132,6 +168,7 @@ def _output_label(symbol: str | None, input_path: Path) -> str:
 def _print_table(summary: pd.DataFrame) -> None:
     display = summary[
         [
+            "symbol",
             "period",
             "strategy",
             "total_return",
@@ -150,7 +187,7 @@ def _print_table(summary: pd.DataFrame) -> None:
 
 def _print_walk_forward_aggregate(summary: pd.DataFrame) -> None:
     aggregate = (
-        summary.groupby("strategy")
+        summary.groupby(["symbol", "strategy"])
         .agg(
             windows=("window", "nunique"),
             average_return=("total_return", "mean"),
@@ -163,6 +200,32 @@ def _print_walk_forward_aggregate(summary: pd.DataFrame) -> None:
     for column in ["average_return", "worst_drawdown", "average_vs_buy_and_hold"]:
         aggregate[column] = aggregate[column].map(_format_percent)
     print(aggregate.to_string(index=False))
+
+
+def _print_diagnostics(diagnostics: pd.DataFrame) -> None:
+    if diagnostics.empty:
+        print("Sin diagnosticos.")
+        return
+    display = diagnostics[
+        [
+            "symbol",
+            "strategy",
+            "robustness_score",
+            "test_vs_buy_and_hold_return",
+            "abs_train_test_return_gap",
+            "walk_forward_positive_rate",
+            "test_number_of_trades",
+            "flags",
+        ]
+    ].copy()
+    for column in [
+        "test_vs_buy_and_hold_return",
+        "abs_train_test_return_gap",
+        "walk_forward_positive_rate",
+    ]:
+        display[column] = display[column].map(_format_percent)
+    display["robustness_score"] = display["robustness_score"].map(_format_float)
+    print(display.to_string(index=False))
 
 
 def _format_percent(value: float | int) -> str:

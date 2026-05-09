@@ -3,7 +3,10 @@ import pytest
 
 from algotrading.backtesting import BacktestConfig
 from algotrading.evaluation import (
+    analyze_parameter_sensitivity,
+    build_robustness_diagnostics,
     count_parameter_combinations,
+    evaluate_multi_asset_train_test,
     evaluate_train_test,
     evaluate_walk_forward,
     make_train_test_split,
@@ -67,6 +70,19 @@ def test_evaluate_train_test_adds_buy_and_hold_benchmark_columns():
     assert (cash_rows["vs_buy_and_hold_return"] < 0).all()
 
 
+def test_evaluate_multi_asset_train_test_adds_symbol_column():
+    summary = evaluate_multi_asset_train_test(
+        frames={"AAA": _frame(12), "BBB": _frame(12)},
+        strategy_specs=_specs(),
+        config=BacktestConfig(commission_bps=0, slippage_bps=0),
+        train_ratio=0.5,
+        warmup_bars=2,
+    )
+
+    assert set(summary["symbol"]) == {"AAA", "BBB"}
+    assert set(summary["period"]) == {"train", "test"}
+
+
 def test_make_walk_forward_splits_uses_rolling_windows():
     splits = make_walk_forward_splits(
         _frame(12),
@@ -96,6 +112,63 @@ def test_evaluate_walk_forward_returns_test_rows_only():
     assert set(summary["period"]) == {"walk_forward_test"}
     assert set(summary["window"]) == {1, 2}
     assert len(summary) == 4
+
+
+def test_build_robustness_diagnostics_flags_weak_strategy():
+    train_test = evaluate_multi_asset_train_test(
+        frames={"AAA": _frame(20)},
+        strategy_specs=_specs(),
+        config=BacktestConfig(commission_bps=0, slippage_bps=0),
+        train_ratio=0.5,
+        warmup_bars=2,
+    )
+    walk_forward = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "strategy": "cash",
+                "window": 1,
+                "total_return": 0.0,
+                "max_drawdown": 0.0,
+                "vs_buy_and_hold_return": -0.1,
+            }
+        ]
+    )
+
+    diagnostics = build_robustness_diagnostics(
+        train_test,
+        walk_forward=walk_forward,
+        min_trades=2,
+    )
+    cash = diagnostics[diagnostics["strategy"] == "cash"].iloc[0]
+
+    assert "underperforms_benchmark_in_test" in cash["flags"]
+    assert "few_trades" in cash["flags"]
+    assert cash["robustness_score"] < 100
+
+
+def test_analyze_parameter_sensitivity_summarizes_parameter_ranges():
+    ranking = pd.DataFrame(
+        [
+            {
+                "family": "sma",
+                "parameters": '{"fast_window": 10, "slow_window": 50}',
+                "test_total_return": 0.10,
+            },
+            {
+                "family": "sma",
+                "parameters": '{"fast_window": 20, "slow_window": 50}',
+                "test_total_return": 0.20,
+            },
+        ]
+    )
+
+    sensitivity = analyze_parameter_sensitivity(ranking)
+    fast = sensitivity[sensitivity["parameter"] == "fast_window"].iloc[0]
+
+    assert fast["values_tested"] == 2
+    assert fast["metric_range"] == pytest.approx(0.10)
+    assert fast["best_value"] == 20
 
 
 def test_parameter_grid_guard_counts_and_rejects_large_searches():

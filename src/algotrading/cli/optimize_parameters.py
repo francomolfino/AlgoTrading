@@ -7,6 +7,7 @@ import pandas as pd
 
 from algotrading.backtesting import BacktestConfig
 from algotrading.data.storage import build_data_path, load_ohlcv, safe_filename_part
+from algotrading.evaluation import analyze_parameter_sensitivity
 from algotrading.optimization import (
     build_rsi_candidates,
     build_sma_candidates,
@@ -82,13 +83,19 @@ def main(argv: list[str] | None = None) -> int:
     results_dir.mkdir(parents=True, exist_ok=True)
     ranking_path = results_dir / f"{base_name}_optimization_ranking.csv"
     periods_path = results_dir / f"{base_name}_optimization_periods.csv"
+    sensitivity_path = results_dir / f"{base_name}_parameter_sensitivity.csv"
+    sensitivity = analyze_parameter_sensitivity(search_result.ranking)
     search_result.ranking.to_csv(ranking_path, index=False)
     search_result.period_results.to_csv(periods_path, index=False)
+    sensitivity.to_csv(sensitivity_path, index=False)
 
     print(f"[ok] ranking -> {ranking_path}")
     print(f"[ok] periodos -> {periods_path}")
+    print(f"[ok] sensibilidad -> {sensitivity_path}")
     print("\nTop candidatos, ordenados por test vs buy and hold y estabilidad train/test:")
     _print_top(search_result.ranking, top=args.top)
+    print("\nSensibilidad de parametros:")
+    _print_sensitivity(sensitivity)
     return 0
 
 
@@ -167,6 +174,28 @@ def _print_top(ranking: pd.DataFrame, top: int) -> None:
     ]:
         display[column] = display[column].map(_format_percent)
     display["test_sharpe_ratio"] = display["test_sharpe_ratio"].map(_format_float)
+    print(display.to_string(index=False))
+
+
+def _print_sensitivity(sensitivity: pd.DataFrame) -> None:
+    if sensitivity.empty:
+        print("Sin sensibilidad para mostrar.")
+        return
+    display = sensitivity[
+        [
+            "family",
+            "parameter",
+            "values_tested",
+            "metric_min",
+            "metric_median",
+            "metric_max",
+            "metric_range",
+            "best_value",
+            "worst_value",
+        ]
+    ].copy()
+    for column in ["metric_min", "metric_median", "metric_max", "metric_range"]:
+        display[column] = display[column].map(_format_percent)
     print(display.to_string(index=False))
 
 

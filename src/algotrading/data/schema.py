@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 REQUIRED_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
@@ -40,7 +41,7 @@ def normalize_ohlcv_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
         normalized["adj_close"] = normalized["close"]
 
     normalized = normalized[CANONICAL_COLUMNS].copy()
-    normalized["date"] = pd.to_datetime(normalized["date"], errors="coerce").dt.tz_localize(None)
+    normalized["date"] = _parse_dates(normalized["date"])
 
     for column in NUMERIC_COLUMNS:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
@@ -65,16 +66,28 @@ def validate_ohlcv_dataframe(frame: pd.DataFrame) -> None:
     if null_columns:
         raise ValidationError(f"Hay valores nulos en: {', '.join(null_columns)}")
 
-    if frame["date"].duplicated().any():
+    parsed_dates = _parse_dates(frame["date"])
+    numeric = _parse_numeric_columns(frame)
+    if parsed_dates.duplicated().any():
         raise ValidationError("Hay fechas duplicadas.")
 
-    if not frame["date"].is_monotonic_increasing:
+    if not parsed_dates.is_monotonic_increasing:
         raise ValidationError("Las fechas deben estar ordenadas de menor a mayor.")
 
-    if (frame["high"] < frame["low"]).any():
+    price_columns = ["open", "high", "low", "close", "adj_close"]
+    if (numeric[price_columns] <= 0).any().any():
+        raise ValidationError("Hay precios menores o iguales a cero.")
+
+    if (numeric["high"] < numeric["low"]).any():
         raise ValidationError("Hay filas con high menor que low.")
 
-    if (frame["volume"] < 0).any():
+    if ((numeric["open"] > numeric["high"]) | (numeric["open"] < numeric["low"])).any():
+        raise ValidationError("Hay filas con open fuera del rango low/high.")
+
+    if ((numeric["close"] > numeric["high"]) | (numeric["close"] < numeric["low"])).any():
+        raise ValidationError("Hay filas con close fuera del rango low/high.")
+
+    if (numeric["volume"] < 0).any():
         raise ValidationError("Hay volumen negativo.")
 
 
@@ -105,3 +118,28 @@ def _rename_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _normalize_column_name(column: object) -> str:
     return str(column).strip().lower().replace("_", " ")
+
+
+def _parse_dates(values: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(values, errors="coerce", utc=True).dt.tz_convert(None)
+    if parsed.isna().any():
+        raise ValidationError("Hay fechas invalidas.")
+    return parsed
+
+
+def _parse_numeric_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    numeric = frame[NUMERIC_COLUMNS].apply(pd.to_numeric, errors="coerce")
+    invalid_columns = [column for column in NUMERIC_COLUMNS if numeric[column].isna().any()]
+    if invalid_columns:
+        raise ValidationError(
+            f"Hay valores numericos invalidos en: {', '.join(invalid_columns)}"
+        )
+
+    non_finite_columns = [
+        column for column in NUMERIC_COLUMNS if not np.isfinite(numeric[column]).all()
+    ]
+    if non_finite_columns:
+        raise ValidationError(
+            f"Hay valores numericos no finitos en: {', '.join(non_finite_columns)}"
+        )
+    return numeric

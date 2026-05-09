@@ -12,9 +12,18 @@ class OrderSide(str, Enum):
 
 
 class OrderStatus(str, Enum):
+    CREATED = "created"
     SUBMITTED = "submitted"
     FILLED = "filled"
     REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+
+class MarketEventType(str, Enum):
+    BAR = "bar"
+    HEARTBEAT = "heartbeat"
+    PROVIDER_ERROR = "provider_error"
+    MARKET_CLOSED = "market_closed"
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,25 @@ class Bar:
 
 
 @dataclass(frozen=True)
+class MarketEvent:
+    timestamp: pd.Timestamp
+    event_type: MarketEventType
+    symbol: str = ""
+    bar: Bar | None = None
+    message: str = ""
+
+    @classmethod
+    def from_bar(cls, bar: Bar) -> MarketEvent:
+        return cls(
+            timestamp=bar.date,
+            event_type=MarketEventType.BAR,
+            symbol=bar.symbol,
+            bar=bar,
+            message="bar",
+        )
+
+
+@dataclass(frozen=True)
 class Order:
     order_id: int
     timestamp: pd.Timestamp
@@ -68,3 +96,21 @@ class Fill:
     notional: float
     commission: float
     slippage_bps: float
+
+
+@dataclass(frozen=True)
+class OrderEvent:
+    order_id: int
+    timestamp: pd.Timestamp
+    symbol: str
+    status: OrderStatus
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class BrokerError:
+    timestamp: pd.Timestamp
+    order_id: int
+    symbol: str
+    error_type: str
+    message: str

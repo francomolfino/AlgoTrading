@@ -110,10 +110,12 @@ El backtester actual es educativo y long-only:
 
 - Entra comprado cuando la senal es `1`.
 - Sale a efectivo cuando la senal es `0`.
-- Usa todo el capital disponible, sin apalancamiento.
+- Permite definir que fraccion del capital usa en cada entrada, sin apalancamiento.
 - Aplica comisiones y slippage en basis points.
 - Ejecuta la senal con un dia de retraso: `signal[t]` opera en `t+1`.
+- Puede aplicar stop loss y take profit simplificados usando precio de cierre.
 - Cierra posiciones abiertas al final del periodo para calcular trades completos.
+- Agrega un benchmark buy and hold con los mismos costos y sizing.
 
 Ejemplo con una senal demo `adj_close > SMA(200)`:
 
@@ -127,10 +129,22 @@ Cambiar la SMA demo:
 python scripts\run_backtest.py --symbol QQQ --demo-sma-window 100
 ```
 
+Usar solo una parte del capital y stops educativos:
+
+```powershell
+python scripts\run_backtest.py --symbol SPY --position-fraction 0.5 --stop-loss-pct 0.10 --take-profit-pct 0.25
+```
+
 Usar un archivo con una columna propia `signal`:
 
 ```powershell
 python scripts\run_backtest.py --input data\processed\SPY_1D_exploration.csv --signal-column signal
+```
+
+Por defecto, el backtester falla si `signal` tiene valores faltantes. Si queres tratarlos explicitamente como cash:
+
+```powershell
+python scripts\run_backtest.py --input data\processed\SPY_1D_exploration.csv --signal-column signal --allow-missing-signals-as-cash
 ```
 
 Salidas:
@@ -138,6 +152,7 @@ Salidas:
 ```text
 reports/backtests/SPY_1D_DEMO_SMA_200_equity.csv
 reports/backtests/SPY_1D_DEMO_SMA_200_trades.csv
+reports/backtests/SPY_1D_DEMO_SMA_200_orders.csv
 reports/backtests/SPY_1D_DEMO_SMA_200_metrics.json
 reports/figures/SPY_1D_DEMO_SMA_200_equity.png
 ```
@@ -151,8 +166,10 @@ Metricas incluidas:
 - Win rate.
 - Numero de trades.
 - Comisiones totales.
+- Retorno del benchmark buy and hold.
+- Exceso de retorno contra benchmark.
 
-Decision prudente: este backtester no simula liquidez real, spreads variables, impuestos, gaps intradiarios ni ejecucion parcial. Sirve para aprender mecanica y detectar ideas malas rapido, no para operar dinero real.
+Decision prudente: los stops y take profit usan cierre diario, no precios intradiarios. Este backtester no simula liquidez real, spreads variables, impuestos, gaps intradiarios ni ejecucion parcial. Sirve para aprender mecanica y detectar ideas malas rapido, no para operar dinero real.
 
 ## Etapa 4: estrategias iniciales
 
@@ -306,6 +323,12 @@ python scripts\analyze_portfolio.py --symbols SPY QQQ
 python scripts\analyze_portfolio.py --symbols BTC-USD ETH-USD
 ```
 
+Rebalanceo con costos simulados:
+
+```powershell
+python scripts\analyze_portfolio.py --symbols SPY QQQ BTC-USD ETH-USD --rebalance-frequency monthly --commission-bps 1 --slippage-bps 2
+```
+
 Salidas:
 
 ```text
@@ -313,6 +336,7 @@ reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_prices.csv
 reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_returns.csv
 reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_individual_equity.csv
 reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_equal_weight_equity.csv
+reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_equal_weight_orders.csv
 reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_correlations.csv
 reports/portfolio/SPY_QQQ_BTC_USD_ETH_USD_1D_summary.csv
 reports/figures/SPY_QQQ_BTC_USD_ETH_USD_1D_portfolio_equity.png
@@ -324,10 +348,11 @@ Que calcula:
 - Retornos diarios por activo.
 - Equity curve individual, como si invirtieras el capital inicial completo en cada activo por separado.
 - Cartera equal-weight diaria, con el mismo peso en cada activo.
+- Ordenes simuladas de rebalanceo, cash, pesos reales y costos.
 - Correlaciones de retornos diarios.
 - Drawdown de la cartera.
 
-Decision prudente: la cartera equal-weight ignora costos de rebalanceo, impuestos y restricciones operativas. Sirve para estudiar diversificacion y correlaciones; todavia no es una simulacion real de ejecucion.
+Decision prudente: la cartera equal-weight ahora puede simular rebalanceo, comisiones y slippage simples. Sigue ignorando impuestos, liquidez real, spreads variables y ejecucion parcial, asi que todavia no es una simulacion lista para dinero real.
 
 Nota al mezclar ETFs y cripto: se usan fechas comunes entre activos. Los fines de semana de cripto no aparecen como filas separadas cuando tambien hay ETFs, pero su movimiento queda capturado en el siguiente precio disponible en fecha comun.
 
@@ -383,6 +408,279 @@ Antes de operar dinero real faltaria:
 - logs auditables persistentes;
 - alertas y monitoreo;
 - pruebas en paper trading real durante suficiente tiempo.
+
+## Etapa 12: sistema de experimentos
+
+Esta etapa permite correr backtests reproducibles desde configs JSON y guardar una carpeta completa por experimento.
+
+Ejemplo:
+
+```powershell
+python scripts\run_experiment.py --config configs\experiments\spy_sma_cross.json
+```
+
+Comparar experimentos ya corridos:
+
+```powershell
+python scripts\compare_experiments.py --experiments-root experiments
+```
+
+Cada experimento guarda:
+
+- `config.json`: configuracion exacta usada.
+- `metadata.json`: version del proyecto, Python, pandas y commit git si esta disponible.
+- `summary.csv`: metricas principales por activo.
+- `<SYMBOL>/equity.csv`: equity curve.
+- `<SYMBOL>/trades.csv`: trades cerrados.
+- `<SYMBOL>/orders.csv`: ordenes simuladas.
+- `<SYMBOL>/metrics.json`: metricas completas.
+- `figures/`: graficos generados.
+
+Decision prudente: el sistema de experimentos no mejora una estrategia por si solo. Sirve para trazabilidad: poder repetir, comparar y auditar resultados sin depender de memoria o comandos sueltos.
+
+## Etapa 13: reportes automaticos
+
+Cada experimento genera reportes por activo dentro de la carpeta del simbolo:
+
+```text
+experiments/<RUN_ID>_<EXPERIMENT_NAME>/SPY/report.md
+experiments/<RUN_ID>_<EXPERIMENT_NAME>/SPY/metrics_table.csv
+experiments/<RUN_ID>_<EXPERIMENT_NAME>/SPY/monthly_returns.csv
+experiments/<RUN_ID>_<EXPERIMENT_NAME>/SPY/period_extremes.csv
+experiments/<RUN_ID>_<EXPERIMENT_NAME>/SPY/exposure.csv
+experiments/<RUN_ID>_<EXPERIMENT_NAME>/SPY/equity_drawdown.png
+```
+
+El reporte incluye:
+
+- equity curve y drawdown;
+- tabla de metricas;
+- comparacion contra benchmark buy and hold;
+- retornos mensuales;
+- mejores y peores ventanas;
+- exposicion al mercado;
+- resumen de trades;
+- comentario automatico breve.
+
+Uso:
+
+```powershell
+python scripts\run_experiment.py --config configs\experiments\spy_sma_cross.json
+```
+
+Decision prudente: el comentario automatico no recomienda operar. Solo resume trade-offs visibles: retorno vs benchmark, drawdown, exposicion y cantidad de trades. Si hay pocos trades o un resultado demasiado llamativo, lo marca como algo a revisar.
+
+## Etapa 14: robustez de estrategias
+
+El diagnostico de robustez combina train/test, walk-forward y comparacion contra buy and hold en una tabla con score y flags.
+
+Un activo:
+
+```powershell
+python scripts\evaluate_robustness.py --symbol SPY --walk-forward
+```
+
+Varios activos:
+
+```powershell
+python scripts\evaluate_robustness.py --symbols SPY QQQ BTC-USD ETH-USD --walk-forward
+```
+
+Salidas:
+
+```text
+reports/robustness/SPY_1D_train_test.csv
+reports/robustness/SPY_1D_walk_forward.csv
+reports/robustness/SPY_1D_diagnostics.csv
+```
+
+Flags posibles:
+
+- `underperforms_benchmark_in_test`: pierde contra buy and hold en test.
+- `large_train_test_gap`: train y test cuentan historias muy distintas.
+- `few_trades`: pocos trades para sacar conclusiones fuertes.
+- `unstable_walk_forward`: falla en demasiadas ventanas walk-forward.
+- `walk_forward_underperforms_benchmark`: pierde contra benchmark en promedio walk-forward.
+- `too_good_to_trust`: resultado demasiado llamativo para creerlo sin revisar.
+- `high_drawdown`: drawdown muy grande.
+
+La optimizacion controlada tambien guarda sensibilidad de parametros:
+
+```powershell
+python scripts\optimize_parameters.py --symbol SPY
+```
+
+Salida nueva:
+
+```text
+reports/optimization/SPY_1D_parameter_sensitivity.csv
+```
+
+Decision prudente: el `robustness_score` no decide por vos. Sirve para ordenar revisiones y detectar fragilidad. Una estrategia con score alto igual necesita validacion fuera de muestra, costos realistas, paper trading y control de riesgo.
+
+## Etapa 15: risk management
+
+Esta etapa agrega reglas explicitas para limitar riesgo en backtesting y paper trading simulado.
+
+Backtest con limites:
+
+```powershell
+python scripts\run_backtest.py --symbol SPY --position-fraction 0.5 --max-total-exposure 0.5 --max-drawdown-pct 0.20 --stop-loss-pct 0.10 --take-profit-pct 0.25
+```
+
+Backtest con volatility targeting educativo:
+
+```powershell
+python scripts\run_backtest.py --symbol SPY --volatility-target-pct 0.15 --volatility-window 20
+```
+
+Paper trading simulado con corte por drawdown:
+
+```powershell
+python scripts\simulate_paper_trading.py --symbol SPY --max-position-fraction 0.5 --max-total-exposure 0.5 --max-drawdown-pct 0.20 --max-trades-per-day 2
+```
+
+Reglas incluidas:
+
+- `position_fraction`: fraccion base de capital por entrada.
+- `max_total_exposure`: exposicion maxima total long-only.
+- `max_drawdown_pct`: apaga la estrategia y liquida posicion si se alcanza el drawdown limite.
+- `max_trades_per_day`: limita cantidad de ordenes simuladas por dia.
+- `stop_loss_pct` y `take_profit_pct`: salidas simples usando precio de cierre.
+- `volatility_target_pct`: reduce exposicion cuando la volatilidad realizada supera el objetivo.
+
+Columnas nuevas utiles:
+
+- `risk_halted`: indica si la estrategia quedo apagada por riesgo.
+- `risk_event`: motivo del evento de riesgo, por ejemplo `max_drawdown`.
+- `blocked_reason`: motivo por el que no se envio una orden, por ejemplo `trade_limit`.
+
+Decision prudente: estas reglas no vuelven rentable una estrategia. Sirven para evitar que una idea mala destruya la cuenta simulada sin control. En dinero real faltarian limites diarios, monitoreo, alertas, reconciliacion con broker y manejo de errores operativos.
+
+## Etapa 16: paper trading mas realista
+
+El broker fake ahora registra lifecycle de ordenes y estado persistente.
+
+Modo normal:
+
+```powershell
+python scripts\simulate_paper_trading.py --symbol SPY --strategy sma_cross --fast-window 20 --slow-window 200
+```
+
+Modo dry-run, sin fills ni cambios de posicion:
+
+```powershell
+python scripts\simulate_paper_trading.py --symbol SPY --dry-run --state-path reports\paper_trading\SPY_fake_broker_state.json
+```
+
+Salidas nuevas:
+
+```text
+reports/paper_trading/SPY_1D_SMA_CROSS_20_200_order_events.csv
+reports/paper_trading/SPY_1D_SMA_CROSS_20_200_errors.csv
+reports/paper_trading/SPY_fake_broker_state.json
+```
+
+Lifecycle registrado:
+
+- `created`
+- `submitted`
+- `filled`
+- `rejected`
+- `cancelled`
+
+Que mejora:
+
+- `orders.csv` guarda el estado final de cada orden.
+- `order_events.csv` guarda el camino completo de cada orden.
+- `errors.csv` guarda rechazos y errores del broker fake.
+- `dry-run` permite ver que ordenes intentaria enviar la estrategia sin llenar operaciones.
+- `state-path` guarda cash, posiciones, ordenes, fills, eventos y errores en JSON.
+
+Decision prudente: dry-run no es paper trading real con broker. Sirve para auditar intenciones y logging. En un broker real faltarian estados asincronicos, ordenes abiertas, cancelaciones reales, reconexion, reconciliacion de cuenta y manejo de errores de red.
+
+## Etapa 17: preparacion para datos en vivo
+
+Esta etapa no conecta dinero real ni una fuente live real. Prepara contratos para que el proyecto pueda cambiar de datos historicos a eventos de mercado sin reescribir estrategias.
+
+Nuevas piezas:
+
+- `MarketDataProvider`: interfaz para providers que emiten barras OHLCV.
+- `MarketEventProvider`: interfaz para providers que emiten eventos.
+- `MarketEvent`: evento comun para `bar`, `heartbeat`, `provider_error` y `market_closed`.
+- `YahooHistoricalDataProvider`: encapsula yfinance para historico.
+- `FakeLiveDataProvider`: reproduce datos historicos como si fueran eventos live.
+- `SafeExecutionLoop`: loop defensivo que cuenta eventos, captura errores y corta de forma controlada.
+
+Replay local de eventos usando datos ya descargados:
+
+```powershell
+python scripts\replay_market_events.py --symbol SPY --heartbeat-every 50
+```
+
+Limitar eventos para una prueba chica:
+
+```powershell
+python scripts\replay_market_events.py --symbol SPY --max-events 10
+```
+
+Salidas:
+
+```text
+reports/live_replay/SPY_1D_market_events.csv
+reports/live_replay/SPY_1D_loop_errors.csv
+reports/live_replay/SPY_1D_loop_summary.json
+```
+
+Decision prudente: el loop live/replay no opera. Solo demuestra como circularian eventos de mercado y donde se enchufarian strategy, execution, broker y risk manager. Antes de conectar un broker real faltan datos live confiables, sincronizacion horaria, calendario de mercado, ordenes asincronicas, reconciliacion de cuenta, monitoreo, alertas, limites diarios y pruebas prolongadas en paper trading real.
+
+## Etapa 18: interfaz local Streamlit
+
+La primera version de la interfaz permite usar el framework desde una app local.
+
+Guia recomendada para aprender los conceptos basicos mientras usas la app:
+
+- [Algorithmic Trading desde cero usando AlgoTrading Lab](docs/algorithmic_trading_desde_cero.md)
+
+Instalar dependencias de UI:
+
+```powershell
+python -m pip install -e .[dev,ui]
+```
+
+Ejecutar:
+
+```powershell
+python -m streamlit run app\streamlit_app.py
+```
+
+Pantallas funcionales:
+
+- Home / Overview.
+- Data Manager.
+- Strategy Lab.
+- Backtest Runner.
+- Results Dashboard.
+- Experiment Explorer.
+- Robustness Lab.
+- Portfolio Lab.
+- Risk Manager.
+- Paper Trading Simulator.
+- Reports / Export.
+- Settings.
+
+La UI permite validar datos, revisar senales, correr backtests, guardar experimentos,
+ver metricas, equity curve, drawdown, trades, comparar experimentos guardados,
+evaluar robustez, correr portfolios basicos, comparar reglas de riesgo y simular
+paper trading sin ordenes reales.
+
+Los graficos de la app usan TradingView Lightweight Charts con datos locales del
+laboratorio. Los reportes de backtest guardan `equity_drawdown.html` interactivo
+ademas del PNG estatico.
+
+Decision prudente: la app no expone brokers reales ni pide API keys. Paper trading real
+queda fuera de esta primera version visual; cualquier pantalla relacionada se muestra
+como simulacion o pendiente.
 
 ## Decisión prudente
 

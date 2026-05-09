@@ -37,6 +37,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--initial-capital", type=float, default=10_000.0)
     parser.add_argument("--commission-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
+    parser.add_argument(
+        "--position-fraction",
+        type=float,
+        default=1.0,
+        help="Fraccion del equity a usar al entrar long. 1.0 equivale a 100%%.",
+    )
+    parser.add_argument(
+        "--stop-loss-pct",
+        type=float,
+        default=None,
+        help="Stop loss close-based opcional. Ejemplo: 0.10 equivale a 10%%.",
+    )
+    parser.add_argument(
+        "--take-profit-pct",
+        type=float,
+        default=None,
+        help="Take profit close-based opcional. Ejemplo: 0.25 equivale a 25%%.",
+    )
+    parser.add_argument("--max-total-exposure", type=float, default=1.0)
+    parser.add_argument(
+        "--max-drawdown-pct",
+        type=float,
+        default=None,
+        help="Corta la estrategia si el drawdown alcanza este umbral. Ejemplo: 0.20.",
+    )
+    parser.add_argument("--max-trades-per-day", type=int, default=None)
+    parser.add_argument(
+        "--volatility-target-pct",
+        type=float,
+        default=None,
+        help="Target de volatilidad anual para reducir exposicion. Ejemplo: 0.15.",
+    )
+    parser.add_argument("--volatility-window", type=int, default=20)
+    parser.add_argument(
+        "--allow-missing-signals-as-cash",
+        action="store_true",
+        help="Trata senales NaN como 0. Por defecto el backtester falla.",
+    )
     parser.add_argument("--results-dir", default="reports/backtests")
     parser.add_argument("--figures-dir", default="reports/figures")
     return parser
@@ -63,6 +101,15 @@ def main(argv: list[str] | None = None) -> int:
         slippage_bps=args.slippage_bps,
         price_column=args.price_column,
         signal_column=args.signal_column,
+        allow_missing_signals=args.allow_missing_signals_as_cash,
+        position_fraction=args.position_fraction,
+        stop_loss_pct=args.stop_loss_pct,
+        take_profit_pct=args.take_profit_pct,
+        max_total_exposure=args.max_total_exposure,
+        max_drawdown_pct=args.max_drawdown_pct,
+        max_trades_per_day=args.max_trades_per_day,
+        volatility_target_pct=args.volatility_target_pct,
+        volatility_window=args.volatility_window,
     )
     result = run_backtest(frame, config=config)
 
@@ -75,11 +122,13 @@ def main(argv: list[str] | None = None) -> int:
 
     equity_path = results_dir / f"{base_name}_equity.csv"
     trades_path = results_dir / f"{base_name}_trades.csv"
+    orders_path = results_dir / f"{base_name}_orders.csv"
     metrics_path = results_dir / f"{base_name}_metrics.json"
     figure_path = figures_dir / f"{base_name}_equity.png"
 
     result.equity_curve.to_csv(equity_path, index=False)
     result.trades.to_csv(trades_path, index=False)
+    result.orders.to_csv(orders_path, index=False)
     metrics_path.write_text(
         json.dumps(_json_safe_metrics(result.metrics), indent=2),
         encoding="utf-8",
@@ -91,7 +140,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     figure.savefig(figure_path, dpi=140, bbox_inches="tight")
 
-    _print_result(result.metrics, equity_path, trades_path, metrics_path, figure_path)
+    _print_result(
+        result.metrics,
+        equity_path,
+        trades_path,
+        orders_path,
+        metrics_path,
+        figure_path,
+    )
     return 0
 
 
@@ -146,11 +202,13 @@ def _print_result(
     metrics: dict[str, float | int],
     equity_path: Path,
     trades_path: Path,
+    orders_path: Path,
     metrics_path: Path,
     figure_path: Path,
 ) -> None:
     print(f"[ok] equity curve -> {equity_path}")
     print(f"[ok] trades -> {trades_path}")
+    print(f"[ok] orders -> {orders_path}")
     print(f"[ok] metricas -> {metrics_path}")
     print(f"[ok] grafico -> {figure_path}")
     print("\nMetricas:")
@@ -160,6 +218,9 @@ def _print_result(
     print(f"- CAGR: {_format_percent(metrics['cagr'])}")
     print(f"- Sharpe aprox.: {_format_float(metrics['sharpe_ratio'])}")
     print(f"- max drawdown: {metrics['max_drawdown']:.2%}")
+    print(f"- risk halt: {metrics['risk_halt_triggered']}")
+    print(f"- benchmark retorno: {metrics['benchmark_total_return']:.2%}")
+    print(f"- exceso vs benchmark: {metrics['excess_return_vs_benchmark']:.2%}")
     print(f"- win rate: {_format_percent(metrics['win_rate'])}")
     print(f"- trades: {metrics['number_of_trades']}")
     print(f"- comisiones totales: {metrics['total_commissions']:.2f}")

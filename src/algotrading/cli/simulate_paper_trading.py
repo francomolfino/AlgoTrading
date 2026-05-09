@@ -34,7 +34,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--commission-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--max-position-fraction", type=float, default=1.0)
+    parser.add_argument("--max-total-exposure", type=float, default=1.0)
+    parser.add_argument("--max-drawdown-pct", type=float, default=None)
+    parser.add_argument("--max-trades-per-day", type=int, default=None)
     parser.add_argument("--min-trade-value", type=float, default=25.0)
+    parser.add_argument("--dry-run", action="store_true", help="Registra ordenes sin llenar fills.")
+    parser.add_argument(
+        "--state-path",
+        default=None,
+        help="Ruta JSON para persistir estado del broker fake al finalizar.",
+    )
     parser.add_argument("--results-dir", default="reports/paper_trading")
     parser.add_argument("--figures-dir", default="reports/figures")
     return parser
@@ -50,10 +59,15 @@ def main(argv: list[str] | None = None) -> int:
         initial_cash=args.initial_cash,
         commission_bps=args.commission_bps,
         slippage_bps=args.slippage_bps,
+        dry_run=args.dry_run,
+        auto_persist_path=args.state_path,
     )
     risk_manager = RiskManager(
         RiskManagerConfig(
             max_position_fraction=args.max_position_fraction,
+            max_total_exposure=args.max_total_exposure,
+            max_drawdown_pct=args.max_drawdown_pct,
+            max_trades_per_day=args.max_trades_per_day,
             min_trade_value=args.min_trade_value,
         )
     )
@@ -78,14 +92,20 @@ def main(argv: list[str] | None = None) -> int:
 
     account_path = results_dir / f"{base_name}_account.csv"
     orders_path = results_dir / f"{base_name}_orders.csv"
+    order_events_path = results_dir / f"{base_name}_order_events.csv"
     fills_path = results_dir / f"{base_name}_fills.csv"
+    errors_path = results_dir / f"{base_name}_errors.csv"
     summary_path = results_dir / f"{base_name}_summary.json"
     figure_path = figures_dir / f"{base_name}_paper_equity.png"
 
     result.account_history.to_csv(account_path, index=False)
     result.orders.to_csv(orders_path, index=False)
+    result.order_events.to_csv(order_events_path, index=False)
     result.fills.to_csv(fills_path, index=False)
+    result.errors.to_csv(errors_path, index=False)
     summary_path.write_text(json.dumps(result.summary, indent=2), encoding="utf-8")
+    if args.state_path:
+        broker.save_state(args.state_path)
 
     figure = plot_equity_curve_with_drawdown(
         result.account_history,
@@ -93,7 +113,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     figure.savefig(figure_path, dpi=140, bbox_inches="tight")
 
-    _print_summary(result.summary, account_path, orders_path, fills_path, summary_path, figure_path)
+    _print_summary(
+        result.summary,
+        account_path,
+        orders_path,
+        order_events_path,
+        fills_path,
+        errors_path,
+        summary_path,
+        figure_path,
+        Path(args.state_path) if args.state_path else None,
+    )
     return 0
 
 
@@ -123,14 +153,21 @@ def _print_summary(
     summary: dict[str, float | int | str],
     account_path: Path,
     orders_path: Path,
+    order_events_path: Path,
     fills_path: Path,
+    errors_path: Path,
     summary_path: Path,
     figure_path: Path,
+    state_path: Path | None,
 ) -> None:
     print(f"[ok] account history -> {account_path}")
     print(f"[ok] orders -> {orders_path}")
+    print(f"[ok] order events -> {order_events_path}")
     print(f"[ok] fills -> {fills_path}")
+    print(f"[ok] errors -> {errors_path}")
     print(f"[ok] summary -> {summary_path}")
+    if state_path:
+        print(f"[ok] broker state -> {state_path}")
     print(f"[ok] grafico -> {figure_path}")
     print("\nResumen:")
     print(f"- estrategia: {summary['strategy']}")
@@ -138,6 +175,8 @@ def _print_summary(
     print(f"- equity final: {summary['final_equity']:.2f}")
     print(f"- retorno total: {summary['total_return']:.2%}")
     print(f"- max drawdown: {summary['max_drawdown']:.2%}")
-    print(f"- ordenes/fills: {summary['orders']} / {summary['fills']}")
+    print(f"- risk halt: {summary['risk_halt_triggered']}")
+    print(f"- dry-run: {summary['dry_run']}")
+    print(f"- ordenes/eventos/fills/errores: {summary['orders']} / {summary['order_events']} / {summary['fills']} / {summary['errors']}")
     print(f"- comisiones: {summary['total_commissions']:.2f}")
     print(f"- posicion final: {summary['final_position_quantity']:.6f}")
