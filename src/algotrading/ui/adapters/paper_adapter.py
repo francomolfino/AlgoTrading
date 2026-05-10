@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
+
 from algotrading.paper_trading import (
     BreakoutPaperStrategy,
     BuyAndHoldPaperStrategy,
@@ -81,6 +83,52 @@ def supported_paper_strategies() -> dict[str, str]:
     }
 
 
+def build_paper_replay_frame(result: PaperTradingResult) -> pd.DataFrame:
+    """Arma un timeline auditable de la simulacion paper barra por barra."""
+    account = result.account_history.copy()
+    if account.empty:
+        return pd.DataFrame()
+    account["date"] = pd.to_datetime(account["date"], errors="coerce")
+    events = _events_by_timestamp(result.order_events)
+    orders = _orders_by_timestamp(result.orders)
+    fills = _fills_by_timestamp(result.fills)
+    rows = []
+    for index, row in account.reset_index(drop=True).iterrows():
+        timestamp = row["date"]
+        key = _timestamp_key(timestamp)
+        rows.append(
+            {
+                "bar": index + 1,
+                "date": timestamp,
+                "symbol": row.get("symbol", ""),
+                "price": row.get("price"),
+                "executed_target_weight": row.get("executed_target_weight"),
+                "next_target_weight": row.get("next_target_weight"),
+                "action": row.get("action", ""),
+                "risk_event": row.get("risk_event", ""),
+                "blocked_reason": row.get("blocked_reason", ""),
+                "order_status": events.get(key, ""),
+                "order": orders.get(key, ""),
+                "fill": fills.get(key, ""),
+                "fill_price": row.get("fill_price"),
+                "fill_quantity": row.get("fill_quantity"),
+                "commission": row.get("commission"),
+                "cash": row.get("cash"),
+                "position_quantity": row.get("position_quantity"),
+                "equity": row.get("equity"),
+                "drawdown": row.get("drawdown"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def replay_snapshot(replay: pd.DataFrame, position: int) -> dict[str, object]:
+    if replay.empty:
+        return {}
+    position = max(0, min(int(position), len(replay) - 1))
+    return replay.iloc[position].to_dict()
+
+
 def _paper_strategy(request: PaperTradingRequest):
     if request.strategy_key == "buy_and_hold":
         return BuyAndHoldPaperStrategy()
@@ -111,3 +159,53 @@ def _paper_strategy(request: PaperTradingRequest):
             price_column=request.price_column,
         )
     raise ValueError("Estrategia no soportada por paper simulator.")
+
+
+def _timestamp_key(value) -> str:
+    timestamp = pd.Timestamp(value)
+    return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _events_by_timestamp(events: pd.DataFrame) -> dict[str, str]:
+    if events.empty or "timestamp" not in events:
+        return {}
+    frame = events.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    valid = frame.dropna(subset=["timestamp"])
+    grouped = valid.groupby(valid["timestamp"].map(_timestamp_key))
+    return {
+        key: "; ".join(f"{row.status}: {row.message}" for row in group.itertuples())
+        for key, group in grouped
+    }
+
+
+def _orders_by_timestamp(orders: pd.DataFrame) -> dict[str, str]:
+    if orders.empty or "timestamp" not in orders:
+        return {}
+    frame = orders.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    valid = frame.dropna(subset=["timestamp"])
+    grouped = valid.groupby(valid["timestamp"].map(_timestamp_key))
+    return {
+        key: "; ".join(
+            f"#{row.order_id} {row.side} {float(row.quantity):.6g} ({row.status})"
+            for row in group.itertuples()
+        )
+        for key, group in grouped
+    }
+
+
+def _fills_by_timestamp(fills: pd.DataFrame) -> dict[str, str]:
+    if fills.empty or "timestamp" not in fills:
+        return {}
+    frame = fills.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    valid = frame.dropna(subset=["timestamp"])
+    grouped = valid.groupby(valid["timestamp"].map(_timestamp_key))
+    return {
+        key: "; ".join(
+            f"#{row.order_id} {row.side} {float(row.quantity):.6g} @ {float(row.price):.4g}"
+            for row in group.itertuples()
+        )
+        for key, group in grouped
+    }

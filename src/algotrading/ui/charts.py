@@ -17,6 +17,7 @@ def render_price_volume_chart(
     overlay_columns: tuple[str, ...] = (),
     signal_column: str | None = None,
     height: int = 560,
+    show_legend: bool = True,
 ) -> None:
     _render_html_chart(
         html=build_price_volume_chart_html(
@@ -26,6 +27,7 @@ def render_price_volume_chart(
             overlay_columns=overlay_columns,
             signal_column=signal_column,
             height=height,
+            show_legend=show_legend,
         ),
         height=height + 58,
     )

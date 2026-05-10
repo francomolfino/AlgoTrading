@@ -16,6 +16,10 @@ import pandas as pd
 from algotrading.backtesting import BacktestConfig, BacktestResult, run_backtest
 from algotrading.data.storage import build_data_path, load_ohlcv, safe_filename_part
 from algotrading.reports import generate_backtest_report
+from algotrading.ui.adapters.data_quality_adapter import (
+    advanced_quality_to_dict,
+    build_advanced_data_quality_report,
+)
 from algotrading.strategies.breakout import generate_breakout_signals
 from algotrading.strategies.buy_and_hold import generate_buy_and_hold_signals
 from algotrading.strategies.moving_average import generate_sma_crossover_signals
@@ -73,6 +77,7 @@ def run_experiment(config: Mapping[str, Any]) -> ExperimentRunResult:
 
     rows: list[dict[str, Any]] = []
     equity_curves: dict[str, pd.DataFrame] = {}
+    first_quality_report: dict[str, Any] | None = None
     strategy_spec = build_strategy_spec(
         normalized["strategy"],
         price_column=normalized["price_column"],
@@ -82,6 +87,14 @@ def run_experiment(config: Mapping[str, Any]) -> ExperimentRunResult:
     for symbol in normalized["symbols"]:
         frame = _load_symbol_frame(normalized, symbol)
         frame = _filter_dates(frame, start=normalized.get("start"), end=normalized.get("end"))
+        if first_quality_report is None:
+            first_quality_report = advanced_quality_to_dict(
+                build_advanced_data_quality_report(
+                    frame,
+                    symbol=symbol,
+                    interval=normalized["interval"],
+                )
+            )
         signal_frame = strategy_spec.function(
             frame,
             signal_column=backtest_config.signal_column,
@@ -103,6 +116,8 @@ def run_experiment(config: Mapping[str, Any]) -> ExperimentRunResult:
     summary = pd.DataFrame(rows)
     summary_path = experiment_dir / "summary.csv"
     summary.to_csv(summary_path, index=False)
+    if first_quality_report is not None:
+        _write_json(experiment_dir / "data_quality.json", first_quality_report)
 
     if len(equity_curves) > 1:
         figure = plot_equity_comparison(
@@ -154,6 +169,7 @@ def normalize_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized["price_column"] = str(normalized.get("price_column", "adj_close"))
     normalized["output_root"] = str(normalized.get("output_root", "experiments"))
     normalized["run_id"] = str(normalized.get("run_id") or _default_run_id())
+    normalized["research_preset"] = str(normalized.get("research_preset", "sanity_check"))
     normalized["strategy"] = {
         "name": str(strategy["name"]),
         "parameters": dict(strategy.get("parameters", {})),
@@ -386,6 +402,9 @@ def _experiment_metadata(
             "price_column": config.get("price_column"),
         },
         "strategy": dict(config.get("strategy", {})),
+        "research": {
+            "preset": config.get("research_preset", "sanity_check"),
+        },
         "costs": {
             "commission_bps": backtest.get("commission_bps", 1.0),
             "slippage_bps": backtest.get("slippage_bps", 2.0),
@@ -417,6 +436,7 @@ def _experiment_output_files(
         "config": str(experiment_dir / "config.json"),
         "metadata": str(experiment_dir / "metadata.json"),
         "summary": str(summary_path),
+        "data_quality": str(experiment_dir / "data_quality.json"),
         "figures": str(experiment_dir / "figures"),
     }
     for symbol in config.get("symbols", []):

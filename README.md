@@ -6,6 +6,16 @@ Este proyecto no promete rentabilidad ni intenta operar dinero real. La idea es 
 
 La app y el laboratorio fueron hechos 100% vibecodeando.
 
+## Documentacion
+
+- [Instalacion](docs/INSTALL.md)
+- [Guia de uso](docs/USER_GUIDE.md)
+- [Arquitectura](docs/ARCHITECTURE.md)
+- [Workflow de research](docs/RESEARCH_WORKFLOW.md)
+- [Supuestos de backtesting](docs/BACKTESTING_ASSUMPTIONS.md)
+- [Limitaciones de paper trading](docs/PAPER_TRADING_LIMITATIONS.md)
+- [Calidad de datos](docs/DATA_QUALITY.md)
+
 ## Etapa 1: datos históricos
 
 Incluye:

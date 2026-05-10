@@ -14,6 +14,11 @@ from algotrading.data.storage import safe_filename_part
 from algotrading.experiments.runner import collect_environment_metadata
 from algotrading.reports import generate_backtest_report
 from algotrading.ui.adapters.data_adapter import filter_by_dates, load_symbol_data, validate_data_quality
+from algotrading.ui.adapters.data_quality_adapter import (
+    advanced_quality_to_dict,
+    build_advanced_data_quality_report,
+)
+from algotrading.ui.adapters.preset_adapter import normalize_preset_key, preset_to_dict
 from algotrading.ui.adapters.risk_adapter import RiskSettings, validate_risk_settings
 from algotrading.ui.adapters.strategy_adapter import (
     generate_strategy_signals,
@@ -50,6 +55,7 @@ class BacktestRequest:
     risk: RiskSettings = RiskSettings()
     experiment_name: str = "ui_backtest"
     notes: str = ""
+    research_preset: str = "sanity_check"
     save_experiment: bool = True
     experiments_root: Path | str = "experiments"
 
@@ -399,6 +405,12 @@ def save_backtest_experiment(
     result.trades.to_csv(symbol_dir / "trades.csv", index=False)
     result.orders.to_csv(symbol_dir / "orders.csv", index=False)
     _write_json(symbol_dir / "metrics.json", _json_safe(result.metrics))
+    quality_report = build_advanced_data_quality_report(
+        signal_frame,
+        symbol=request.symbol,
+        interval=request.interval,
+    )
+    _write_json(experiment_dir / "data_quality.json", advanced_quality_to_dict(quality_report))
 
     artifacts = generate_backtest_report(
         result=result,
@@ -423,6 +435,7 @@ def save_backtest_experiment(
                 "orders": symbol_dir / "orders.csv",
                 "metrics": symbol_dir / "metrics.json",
                 "report": artifacts.report_path,
+                "data_quality": experiment_dir / "data_quality.json",
             },
         ),
     )
@@ -448,9 +461,11 @@ def _backtest_config(request: BacktestRequest) -> BacktestConfig:
 
 
 def _experiment_config(request: BacktestRequest, run_id: str) -> dict[str, Any]:
+    preset_key = normalize_preset_key(request.research_preset)
     return {
         "experiment_name": request.experiment_name,
         "run_id": run_id,
+        "research_preset": preset_key,
         "symbols": [request.symbol],
         "data_dir": str(request.data_dir),
         "interval": request.interval,
@@ -513,6 +528,10 @@ def _experiment_metadata(
         "strategy": {
             "name": request.strategy_key,
             "parameters": request.strategy_parameters,
+        },
+        "research": {
+            "preset": normalize_preset_key(request.research_preset),
+            "preset_details": preset_to_dict(request.research_preset),
         },
         "costs": {
             "commission_bps": request.commission_bps,

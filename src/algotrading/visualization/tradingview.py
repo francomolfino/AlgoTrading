@@ -31,6 +31,7 @@ def build_price_volume_chart_html(
     signal_column: str | None = None,
     height: int = 520,
     log_scale: bool = True,
+    show_legend: bool = True,
 ) -> str:
     """Construye un grafico interactivo de precio/volumen con Lightweight Charts."""
     if frame.empty:
@@ -63,7 +64,7 @@ def build_price_volume_chart_html(
         body=f"""
 <div class="tv-card">
   <div class="tv-title">{html.escape(title)}</div>
-  {_price_legend_html(overlays, log_scale)}
+  {_price_legend_html(overlays, log_scale) if show_legend else ""}
   <div id="{chart_id}" class="tv-chart" style="height:{height}px;"></div>
   {_attribution_html()}
 </div>

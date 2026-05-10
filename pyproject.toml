@@ -23,6 +23,9 @@ dev = [
 ui = [
     "streamlit>=1.36",
 ]
+calendars = [
+    "pandas-market-calendars>=4.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

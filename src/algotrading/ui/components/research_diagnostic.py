@@ -12,21 +12,29 @@ from algotrading.ui.adapters.journal_adapter import (
 from algotrading.ui.adapters.research_adapter import ResearchSummary, suggested_journal_status
 from algotrading.ui.components.evidence_score import render_evidence_score
 from algotrading.ui.components.research_pipeline import render_research_pipeline
+from algotrading.ui.components.research_presets import render_preset_summary
 from algotrading.ui.components.research_verdict import render_research_verdict
 
 
 def render_research_diagnostic(summary: ResearchSummary) -> None:
     st.subheader("Diagnostico de Research")
+    st.info(f"Preset: **{summary.research_preset.label}**. {summary.research_preset.description}")
     render_research_verdict(summary.verdict)
     render_evidence_score(summary.evidence_score)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Pipeline", summary.pipeline_state)
     c2.metric("Estado journal", summary.journal_state or "Sin estado")
     c3.metric("Robustez", "corrida" if summary.has_robustness else "no corrida")
     c4.metric("Stress", summary.stress_summary["conclusion"] if summary.stress_summary else "no corrido")
     c5.metric("Favorito", "si" if summary.journal_favorite else "no")
+    c6.metric(
+        "Data Quality",
+        f"{summary.data_quality.score:.0f}/100" if summary.data_quality else "n/a",
+        summary.data_quality.severity if summary.data_quality else "no disponible",
+    )
 
+    render_preset_summary(summary.research_preset, expanded=False)
     render_research_pipeline(summary)
 
     if summary.journal_tags:

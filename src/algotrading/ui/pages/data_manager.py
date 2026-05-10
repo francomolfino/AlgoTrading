@@ -11,6 +11,10 @@ from algotrading.ui.adapters.data_adapter import (
     quality_report_frame,
     validate_data_quality,
 )
+from algotrading.ui.adapters.data_quality_adapter import (
+    advanced_quality_frame,
+    build_advanced_data_quality_report,
+)
 from algotrading.ui.charts import render_price_volume_chart
 from algotrading.ui.components.common import show_error as _show_error
 from algotrading.ui.components.data_quality import render_data_quality_reading as _render_data_quality_reading
@@ -62,18 +66,36 @@ def render_data_manager() -> None:
         try:
             frame = load_data_file(asset.path)
             report = validate_data_quality(frame)
+            advanced_report = build_advanced_data_quality_report(
+                frame,
+                symbol=asset.symbol_hint,
+                interval=asset.interval,
+            )
         except Exception as exc:
             _show_error(exc)
             return
 
         st.write(f"Archivo: `{asset.path}`")
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Filas", report.rows)
         m2.metric("Inicio", report.start_date)
         m3.metric("Fin", report.end_date)
         m4.metric("Estado", "ok" if report.is_valid else "revisar")
+        m5.metric("Data Quality", f"{advanced_report.score:.0f}/100", advanced_report.severity)
+        st.caption(
+            f"Calendario aplicado: `{advanced_report.calendar}` | "
+            f"Fuente: `{advanced_report.calendar_provider}` | "
+            f"Precision: `{advanced_report.calendar_precision}` | "
+            f"Tipo detectado: `{advanced_report.asset_type}`."
+        )
         st.dataframe(quality_report_frame(report), width="stretch", hide_index=True)
         _render_data_quality_reading(report)
+        with st.expander("Diagnostico avanzado de calidad", expanded=advanced_report.severity != "ok"):
+            st.caption(
+                "Score heuristico para research local. No reemplaza revisar fuente, splits, dividendos ni calendario."
+            )
+            st.write(f"Tipo detectado: `{advanced_report.asset_type}`")
+            st.dataframe(advanced_quality_frame(advanced_report), width="stretch", hide_index=True)
         if report.null_counts:
             st.warning(f"Valores faltantes detectados: {report.null_counts}", icon="!")
         if report.gap_count:

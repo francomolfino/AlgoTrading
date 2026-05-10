@@ -4,6 +4,8 @@ import streamlit as st
 
 from algotrading.ui.adapters.paper_adapter import (
     PaperTradingRequest,
+    build_paper_replay_frame,
+    replay_snapshot,
     run_paper_trading_request,
     supported_paper_strategies,
 )
@@ -84,9 +86,28 @@ def render_paper_trading_simulator() -> None:
     elif result.summary["fills"] == 0:
         st.warning("No hubo fills simulados. Revisa senales, risk manager, min trade value o periodo elegido.")
     _render_equity_and_drawdown(result.account_history)
-    tabs = st.tabs(["Ordenes", "Eventos", "Fills", "Errores", "Cuenta"])
-    tabs[0].dataframe(result.orders, width="stretch", hide_index=True)
-    tabs[1].dataframe(result.order_events, width="stretch", hide_index=True)
-    tabs[2].dataframe(result.fills, width="stretch", hide_index=True)
-    tabs[3].dataframe(result.errors, width="stretch", hide_index=True)
-    tabs[4].dataframe(result.account_history, width="stretch", hide_index=True)
+    tabs = st.tabs(["Replay", "Ordenes", "Eventos", "Fills", "Errores", "Cuenta"])
+    with tabs[0]:
+        replay = build_paper_replay_frame(result)
+        if replay.empty:
+            st.info("No hay barras para replay.")
+        else:
+            position = st.slider("Barra", 1, len(replay), len(replay), help="Recorre la simulacion barra por barra.")
+            snapshot = replay_snapshot(replay, position - 1)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Fecha", str(snapshot.get("date", ""))[:10])
+            c2.metric("Equity", f"{float(snapshot.get('equity', 0.0)):,.2f}")
+            c3.metric("Cash", f"{float(snapshot.get('cash', 0.0)):,.2f}")
+            c4.metric("Posicion", f"{float(snapshot.get('position_quantity', 0.0)):,.6g}")
+            st.write(f"Senal/peso proximo: `{snapshot.get('next_target_weight', 'n/a')}`")
+            st.write(f"Orden: `{snapshot.get('order') or 'sin orden'}`")
+            st.write(f"Evento broker: `{snapshot.get('order_status') or 'sin evento'}`")
+            st.write(f"Fill: `{snapshot.get('fill') or 'sin fill'}`")
+            if snapshot.get("risk_event") or snapshot.get("blocked_reason"):
+                st.warning(f"Riesgo: {snapshot.get('risk_event') or snapshot.get('blocked_reason')}")
+            st.dataframe(replay, width="stretch", hide_index=True)
+    tabs[1].dataframe(result.orders, width="stretch", hide_index=True)
+    tabs[2].dataframe(result.order_events, width="stretch", hide_index=True)
+    tabs[3].dataframe(result.fills, width="stretch", hide_index=True)
+    tabs[4].dataframe(result.errors, width="stretch", hide_index=True)
+    tabs[5].dataframe(result.account_history, width="stretch", hide_index=True)

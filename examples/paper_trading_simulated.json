@@ -1,0 +1,22 @@
+{
+  "mode": "paper_trading_simulated",
+  "warning": "Simulacion local. No envia ordenes reales.",
+  "symbol": "SPY",
+  "interval": "1d",
+  "data_dir": "data/raw",
+  "strategy": {
+    "name": "sma_cross",
+    "parameters": {
+      "fast_window": 20,
+      "slow_window": 200
+    }
+  },
+  "paper": {
+    "initial_cash": 10000,
+    "commission_bps": 1,
+    "slippage_bps": 2,
+    "max_position_fraction": 1.0,
+    "max_total_exposure": 1.0,
+    "dry_run": false
+  }
+}

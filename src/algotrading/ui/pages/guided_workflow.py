@@ -29,6 +29,7 @@ from algotrading.ui.adapters.journal_adapter import (
     save_research_notes,
     tags_to_text,
 )
+from algotrading.ui.adapters.preset_adapter import get_research_preset, normalize_preset_key, preset_keys, preset_label
 from algotrading.ui.adapters.research_adapter import build_research_summary, save_robustness_for_experiment
 from algotrading.ui.adapters.robustness_adapter import robustness_comment, run_robustness_request
 from algotrading.ui.adapters.strategy_adapter import (
@@ -44,6 +45,7 @@ from algotrading.ui.components.data_quality import render_data_quality_reading a
 from algotrading.ui.components.guided_state import get_guided_draft as _get_guided_draft, set_guided_draft as _set_guided_draft
 from algotrading.ui.components.navigation import go_to_page as _go_to_page
 from algotrading.ui.components.preflight import render_backtest_preflight as _render_backtest_preflight
+from algotrading.ui.components.research_presets import render_preset_summary as _render_preset_summary
 from algotrading.ui.components.research_results import (
     matching_robustness as _matching_robustness,
     matching_stress_test as _matching_stress_test,
@@ -65,6 +67,20 @@ def render_guided_workflow() -> None:
     st.write("Este flujo te lleva de datos a conclusion sin saltarte controles basicos.")
 
     draft = _get_guided_draft()
+    preset_options = preset_keys()
+    selected_preset = st.selectbox(
+        "Preset de research",
+        preset_options,
+        index=preset_options.index(normalize_preset_key(draft.research_preset)),
+        format_func=preset_label,
+        help="Define que checks y metricas son prioritarios para este experimento. No es una recomendacion de inversion.",
+        key="guided_research_preset_select",
+    )
+    if selected_preset != normalize_preset_key(draft.research_preset):
+        _set_guided_draft(update_experiment_draft(draft, research_preset=selected_preset))
+        st.rerun()
+    _render_preset_summary(get_research_preset(selected_preset))
+
     pending_step = st.session_state.pop("pending_guided_step", None)
     if pending_step is not None:
         draft = update_experiment_draft(draft, step=pending_step)
@@ -133,11 +149,20 @@ def _render_guided_data_step(draft: ExperimentDraft) -> None:
     _render_data_quality_reading(report)
 
     price_column = "adj_close" if "adj_close" in frame else "close"
+    chart_scope = st.selectbox(
+        "Rango visible del grafico",
+        ["Todo el historial", "Ultimas 500 barras", "Ultimas 1000 barras"],
+        index=1,
+        help="Solo cambia la vista del grafico. La validacion y el backtest usan el dataset completo o el periodo que configures despues.",
+        key="guided_data_chart_scope",
+    )
+    chart_frame = _guided_chart_frame(frame, chart_scope)
     render_price_volume_chart(
-        frame.tail(500),
-        title=f"{asset.symbol_hint} - ultimas barras disponibles",
+        chart_frame,
+        title=f"{asset.symbol_hint} - {chart_scope.lower()}",
         price_column=price_column,
         height=430,
+        show_legend=False,
     )
     if st.button("Usar estos datos y continuar", type="primary", disabled=not report.is_valid):
         _set_guided_draft(
@@ -155,6 +180,14 @@ def _render_guided_data_step(draft: ExperimentDraft) -> None:
             )
         )
         st.rerun()
+
+
+def _guided_chart_frame(frame: pd.DataFrame, scope: str) -> pd.DataFrame:
+    if scope == "Ultimas 500 barras":
+        return frame.tail(500)
+    if scope == "Ultimas 1000 barras":
+        return frame.tail(1000)
+    return frame
 
 
 def _render_guided_strategy_step(draft: ExperimentDraft) -> None:

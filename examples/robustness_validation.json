@@ -1,0 +1,24 @@
+{
+  "experiment_name": "example_multi_asset_robustness",
+  "research_preset": "robustness_validation",
+  "symbols": ["SPY", "QQQ", "BTC-USD"],
+  "data_dir": "data/raw",
+  "interval": "1d",
+  "price_column": "adj_close",
+  "start": "2018-01-01",
+  "end": null,
+  "output_root": "experiments",
+  "strategy": {
+    "name": "sma_cross",
+    "parameters": {
+      "fast_window": 30,
+      "slow_window": 200
+    }
+  },
+  "backtest": {
+    "initial_capital": 10000,
+    "commission_bps": 1,
+    "slippage_bps": 2,
+    "position_fraction": 0.75
+  }
+}

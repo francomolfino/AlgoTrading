@@ -1,0 +1,24 @@
+{
+  "experiment_name": "example_spy_stress_candidate",
+  "research_preset": "stress_test_only",
+  "symbols": ["SPY"],
+  "data_dir": "data/raw",
+  "interval": "1d",
+  "price_column": "adj_close",
+  "start": "2018-01-01",
+  "end": null,
+  "output_root": "experiments",
+  "strategy": {
+    "name": "breakout",
+    "parameters": {
+      "entry_window": 55,
+      "exit_window": 20
+    }
+  },
+  "backtest": {
+    "initial_capital": 10000,
+    "commission_bps": 1,
+    "slippage_bps": 2,
+    "position_fraction": 1.0
+  }
+}

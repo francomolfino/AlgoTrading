@@ -1,0 +1,25 @@
+{
+  "experiment_name": "example_spy_sma_simple",
+  "research_preset": "sanity_check",
+  "symbols": ["SPY"],
+  "data_dir": "data/raw",
+  "interval": "1d",
+  "price_column": "adj_close",
+  "start": "2018-01-01",
+  "end": null,
+  "output_root": "experiments",
+  "strategy": {
+    "name": "sma_cross",
+    "parameters": {
+      "fast_window": 20,
+      "slow_window": 200
+    }
+  },
+  "backtest": {
+    "initial_capital": 10000,
+    "commission_bps": 1,
+    "slippage_bps": 2,
+    "position_fraction": 1.0,
+    "close_open_position": true
+  }
+}

@@ -29,6 +29,7 @@ class ExperimentDraft:
     interval: str = "1d"
     strategy_key: str = "sma_cross"
     strategy_parameters: dict[str, int | float] = field(default_factory=lambda: default_parameters("sma_cross"))
+    research_preset: str = "sanity_check"
     start: str | None = None
     end: str | None = None
     price_column: str = "adj_close"
@@ -93,6 +94,7 @@ def build_draft_backtest_request(
         risk=draft.risk,
         experiment_name=draft.experiment_name,
         notes=draft.notes,
+        research_preset=draft.research_preset,
         save_experiment=True,
         experiments_root=experiments_root,
     )

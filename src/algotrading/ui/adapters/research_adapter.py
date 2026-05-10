@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from algotrading.ui.adapters.data_quality_adapter import AdvancedDataQualityReport, advanced_quality_from_dict
 from algotrading.ui.adapters.evidence_adapter import EvidenceScore, build_evidence_score_from_details
 from algotrading.ui.adapters.experiment_adapter import (
     ExperimentDetails,
@@ -15,6 +16,7 @@ from algotrading.ui.adapters.experiment_adapter import (
 )
 from algotrading.ui.adapters.guided_adapter import recommend_journal_status
 from algotrading.ui.adapters.journal_adapter import ResearchNotes, load_research_notes
+from algotrading.ui.adapters.preset_adapter import ResearchPreset, get_research_preset, normalize_preset_key
 from algotrading.ui.adapters.robustness_adapter import RobustnessRequest, RobustnessResult, robustness_comment
 from algotrading.ui.adapters.stress_adapter import StressTestRequest, StressTestResult
 from algotrading.ui.adapters.verdict_adapter import ResearchVerdict, build_research_verdict_from_details
@@ -30,6 +32,7 @@ ROBUSTNESS_REGIMES = "robustness_regimes.csv"
 STRESS_REQUEST = "stress_request.json"
 STRESS_METADATA = "stress_metadata.json"
 STRESS_COMPARISON = "stress_comparison.csv"
+DATA_QUALITY_FILENAME = "data_quality.json"
 
 PIPELINE_BACKTEST_CREATED = "Backtest creado"
 PIPELINE_RESULTS_REVIEWED = "Resultados revisados"
@@ -81,6 +84,8 @@ class ResearchSummary:
     robustness_summary: dict[str, Any] | None
     has_stress: bool
     stress_summary: dict[str, Any] | None
+    research_preset: ResearchPreset
+    data_quality: AdvancedDataQualityReport | None
     experiment_metadata: dict[str, Any]
     recommended_next_action: str
     critical_flags: tuple[str, ...]
@@ -99,6 +104,8 @@ def build_research_summary(experiment_dir: Path | str) -> ResearchSummary:
     )
     robustness_summary = summarize_robustness(robustness)
     stress_summary = summarize_stress(stress)
+    research_preset = _research_preset_from_details(details)
+    data_quality = load_data_quality_for_experiment(experiment_dir)
     has_journal = _has_journal(notes)
     pipeline_steps = build_pipeline_steps(
         details=details,
@@ -128,6 +135,8 @@ def build_research_summary(experiment_dir: Path | str) -> ResearchSummary:
         robustness_summary=robustness_summary,
         has_stress=stress is not None,
         stress_summary=stress_summary,
+        research_preset=research_preset,
+        data_quality=data_quality,
         experiment_metadata=experiment_metadata,
         recommended_next_action=recommend_next_action(
             verdict=verdict,
@@ -251,6 +260,11 @@ def load_experiment_metadata(
             return payload
     details = details or load_experiment_details(directory)
     return _fallback_experiment_metadata(details)
+
+
+def load_data_quality_for_experiment(experiment_dir: Path | str) -> AdvancedDataQualityReport | None:
+    payload = _read_json(Path(experiment_dir) / DATA_QUALITY_FILENAME)
+    return advanced_quality_from_dict(payload)
 
 
 def compare_experiment_fairness(records: list[ExperimentRecord]) -> list[ComparisonFairnessIssue]:
@@ -450,6 +464,9 @@ def _research_record_row(record: ExperimentRecord, summary: ResearchSummary | No
             "total_return": record.total_return,
             "sharpe_ratio": record.sharpe_ratio,
             "max_drawdown": record.max_drawdown,
+            "research_preset": "Sanity Check",
+            "data_quality_score": None,
+            "data_quality_severity": "no disponible",
             "path": str(record.path),
         }
     return _research_summary_row(summary)
@@ -480,8 +497,25 @@ def _research_summary_row(summary: ResearchSummary) -> dict[str, Any]:
         "total_return": _optional_float(first_row.get("total_return")),
         "sharpe_ratio": _optional_float(first_row.get("sharpe_ratio")),
         "max_drawdown": _optional_float(first_row.get("max_drawdown")),
+        "research_preset": summary.research_preset.label,
+        "data_quality_score": summary.data_quality.score if summary.data_quality else None,
+        "data_quality_severity": summary.data_quality.severity if summary.data_quality else "no disponible",
         "path": str(details.path),
     }
+
+
+def _research_preset_from_details(details: ExperimentDetails) -> ResearchPreset:
+    config = details.config if isinstance(details.config, dict) else {}
+    research_config = config.get("research", {}) if isinstance(config.get("research", {}), dict) else {}
+    metadata = load_experiment_metadata(details.path, details=details)
+    metadata_research = metadata.get("research", {}) if isinstance(metadata.get("research", {}), dict) else {}
+    key = (
+        config.get("research_preset")
+        or research_config.get("preset")
+        or metadata_research.get("preset")
+        or metadata_research.get("preset_key")
+    )
+    return get_research_preset(normalize_preset_key(str(key) if key else None))
 
 
 def _experiment_fingerprint(experiment_dir: Path | str) -> float:
@@ -492,6 +526,7 @@ def _experiment_fingerprint(experiment_dir: Path | str) -> float:
         directory / "summary.csv",
         directory / "research_notes.json",
         directory / EXPERIMENT_METADATA_FILENAME,
+        directory / DATA_QUALITY_FILENAME,
         directory / RESEARCH_DIR / ROBUSTNESS_DIAGNOSTICS,
         directory / RESEARCH_DIR / STRESS_COMPARISON,
         directory / RESEARCH_DIR / STRESS_METADATA,
@@ -549,6 +584,9 @@ def _fallback_experiment_metadata(details: ExperimentDetails) -> dict[str, Any]:
         "strategy": {
             "name": strategy.get("name", "no disponible"),
             "parameters": strategy.get("parameters", {}),
+        },
+        "research": {
+            "preset": config.get("research_preset", "sanity_check"),
         },
         "costs": {
             "commission_bps": backtest.get("commission_bps", "no disponible"),

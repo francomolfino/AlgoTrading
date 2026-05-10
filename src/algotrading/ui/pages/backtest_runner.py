@@ -8,9 +8,11 @@ from algotrading.ui.adapters.backtest_adapter import (
     preflight_backtest_request,
     run_backtest_request,
 )
+from algotrading.ui.adapters.preset_adapter import get_research_preset, preset_keys, preset_label
 from algotrading.ui.adapters.strategy_adapter import STRATEGIES, get_strategy_config
 from algotrading.ui.components.common import render_bullets as _render_bullets, show_error as _show_error
 from algotrading.ui.components.preflight import render_backtest_preflight as _render_backtest_preflight
+from algotrading.ui.components.research_presets import render_preset_summary as _render_preset_summary
 from algotrading.ui.components.research_results import render_backtest_result as _render_backtest_result
 from algotrading.ui.components.risk_controls import render_risk_settings as _render_risk_settings
 from algotrading.ui.components.selectors import asset_selector as _asset_selector
@@ -38,6 +40,16 @@ def render_backtest_runner() -> None:
     if asset is None:
         st.info("Primero carga datos en Data Manager.")
         return
+
+    st.subheader("Preset de research")
+    research_preset = st.selectbox(
+        "Objetivo del experimento",
+        preset_keys(),
+        format_func=preset_label,
+        help="Usalo para documentar que tipo de evidencia estas buscando. No cambia la logica de la estrategia.",
+        key="backtest_research_preset",
+    )
+    _render_preset_summary(get_research_preset(research_preset))
 
     st.subheader("Estrategia")
     strategy_key = st.selectbox(
@@ -108,6 +120,7 @@ def render_backtest_runner() -> None:
             risk=risk,
             experiment_name=experiment_name,
             notes=notes,
+            research_preset=research_preset,
             save_experiment=save_experiment,
             experiments_root=st.session_state.experiments_dir,
         )

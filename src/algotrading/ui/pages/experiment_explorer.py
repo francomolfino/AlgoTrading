@@ -68,6 +68,7 @@ def render_experiment_explorer() -> None:
         hide_index=True,
         column_config={
             "evidence_score": st.column_config.NumberColumn("Evidence", format="%.1f"),
+            "data_quality_score": st.column_config.NumberColumn("Data Quality", format="%.1f"),
             "total_return": st.column_config.NumberColumn("Retorno", format="%.2%%"),
             "sharpe_ratio": st.column_config.NumberColumn("Sharpe", format="%.2f"),
             "max_drawdown": st.column_config.NumberColumn("Max DD", format="%.2%%"),
@@ -255,7 +256,10 @@ def _explorer_display_frame(frame: pd.DataFrame) -> pd.DataFrame:
         "name",
         "pipeline_state",
         "journal_status",
+        "research_preset",
         "evidence_score",
+        "data_quality_score",
+        "data_quality_severity",
         "checks",
         "favorite_badge",
         "tags",
@@ -286,6 +290,10 @@ def _render_quick_research_badges(record: ExperimentRecord, frame: pd.DataFrame)
     tags = str(row.get("tags", "") or "").strip()
     if tags:
         st.caption(f"Tags: {tags}")
+    preset = str(row.get("research_preset", "") or "").strip()
+    dq_score = row.get("data_quality_score")
+    dq_text = "n/a" if pd.isna(dq_score) else f"{float(dq_score):.0f}/100"
+    st.caption(f"Preset: {preset or 'n/a'} | Data Quality: {dq_text}")
 
 
 def _frame_row_for_record(record: ExperimentRecord, frame: pd.DataFrame):

@@ -14,11 +14,13 @@ from algotrading.ui.adapters.experiment_adapter import (
     critical_reading,
     details_metrics_frame,
 )
+from algotrading.ui.adapters.preset_adapter import get_research_preset
 from algotrading.ui.adapters.research_adapter import build_research_summary
 from algotrading.ui.adapters.verdict_adapter import build_research_verdict_from_result
 from algotrading.ui.components.evidence_score import render_evidence_score
 from algotrading.ui.components.research_diagnostic import render_research_diagnostic
 from algotrading.ui.components.reproducibility import render_reproducibility_sheet
+from algotrading.ui.components.research_presets import render_preset_summary
 from algotrading.ui.components.research_verdict import render_research_verdict
 from algotrading.ui.components.result_views import render_equity_and_drawdown, render_trade_details
 from algotrading.ui.texts import METRIC_EXPLANATIONS, RESULT_READING_ORDER
@@ -152,6 +154,7 @@ def _render_backtest_research_header(artifacts: BacktestRunArtifacts):
             _show_error(exc)
 
     st.subheader("Diagnostico de Research temporal")
+    render_preset_summary(get_research_preset(artifacts.request.research_preset))
     st.warning(
         "Este backtest todavia no funciona como experimento completo: no tiene pipeline, "
         "journal ni robustez/stress persistidos. Guardalo como experimento para que sea reproducible."
