@@ -74,7 +74,10 @@ from algotrading.ui.adapters.reports_adapter import build_experiment_zip, collec
 from algotrading.ui.adapters.research_adapter import (
     ResearchSummary,
     build_research_summary,
+    compare_experiment_fairness,
+    research_records_cache_signature,
     research_records_frame,
+    research_records_frame_from_paths,
     save_robustness_for_experiment,
     save_stress_for_experiment,
     suggested_journal_status,
@@ -114,6 +117,7 @@ from algotrading.ui.adapters.evidence_adapter import (
 )
 from algotrading.ui.components.evidence_score import render_evidence_score
 from algotrading.ui.components.navigation import go_to_page as _go_to_page, nav_button as _nav_button
+from algotrading.ui.components.research_pipeline import render_research_pipeline
 from algotrading.ui.components.research_verdict import render_research_verdict
 from algotrading.ui.adapters.verdict_adapter import (
     build_research_verdict_from_details,
@@ -221,7 +225,7 @@ def _render_experiment_details(details: ExperimentDetails) -> None:
     st.dataframe(metrics_table, width="stretch", hide_index=True)
     _render_metric_guide()
 
-    tabs = st.tabs(["Trades", "Retornos mensuales", "Mejores/peores periodos", "Config"])
+    tabs = st.tabs(["Trades", "Retornos mensuales", "Mejores/peores periodos", "Config", "Metadata"])
     with tabs[0]:
         _render_trade_details(details.trades)
     with tabs[1]:
@@ -230,6 +234,8 @@ def _render_experiment_details(details: ExperimentDetails) -> None:
         st.dataframe(details.period_extremes, width="stretch", hide_index=True)
     with tabs[3]:
         st.json(details.config)
+    with tabs[4]:
+        st.json(summary.experiment_metadata)
 
 
 def _render_research_diagnostic(summary: ResearchSummary) -> None:
@@ -237,11 +243,14 @@ def _render_research_diagnostic(summary: ResearchSummary) -> None:
     render_research_verdict(summary.verdict)
     render_evidence_score(summary.evidence_score)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Estado journal", summary.journal_state or "Sin estado")
-    c2.metric("Robustez", "corrida" if summary.has_robustness else "no corrida")
-    c3.metric("Stress", summary.stress_summary["conclusion"] if summary.stress_summary else "no corrido")
-    c4.metric("Favorito", "si" if summary.journal_favorite else "no")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Pipeline", summary.pipeline_state)
+    c2.metric("Estado journal", summary.journal_state or "Sin estado")
+    c3.metric("Robustez", "corrida" if summary.has_robustness else "no corrida")
+    c4.metric("Stress", summary.stress_summary["conclusion"] if summary.stress_summary else "no corrido")
+    c5.metric("Favorito", "si" if summary.journal_favorite else "no")
+
+    render_research_pipeline(summary)
 
     if summary.journal_tags:
         st.caption("Tags: " + ", ".join(summary.journal_tags))

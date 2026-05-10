@@ -254,6 +254,9 @@ def _render_guided_review_step(draft: ExperimentDraft) -> None:
         return
 
     _render_backtest_result(draft.backtest_artifacts)
+    if draft.backtest_artifacts.experiment_dir is not None:
+        summary = build_research_summary(draft.backtest_artifacts.experiment_dir)
+        st.info(f"Pipeline actual: **{summary.pipeline_state}**. Proxima accion: {summary.recommended_next_action}")
     c1, c2 = st.columns(2)
     if c1.button("Continuar a robustez", type="primary", width="stretch"):
         _set_guided_draft(update_experiment_draft(draft, step=6))

@@ -31,6 +31,7 @@ MIN_BACKTEST_BARS_BY_INTERVAL = {
 
 MIN_NON_BH_ENTRIES = 1
 LOW_SIGNAL_SAMPLE_ENTRIES = 5
+EXPERIMENT_METADATA_FILENAME = "experiment_metadata.json"
 
 
 @dataclass(frozen=True)
@@ -405,6 +406,26 @@ def save_backtest_experiment(
         symbol=request.symbol,
         strategy_name=strategy_name,
     )
+    _write_json(
+        experiment_dir / EXPERIMENT_METADATA_FILENAME,
+        _experiment_metadata(
+            request=request,
+            run_id=run_id,
+            environment_metadata=metadata,
+            config=config,
+            output_files={
+                "config": experiment_dir / "config.json",
+                "metadata": experiment_dir / "metadata.json",
+                "summary": experiment_dir / "summary.csv",
+                "signals": symbol_dir / "signals.csv",
+                "equity": symbol_dir / "equity.csv",
+                "trades": symbol_dir / "trades.csv",
+                "orders": symbol_dir / "orders.csv",
+                "metrics": symbol_dir / "metrics.json",
+                "report": artifacts.report_path,
+            },
+        ),
+    )
     return experiment_dir, artifacts.report_path
 
 
@@ -458,6 +479,60 @@ def _experiment_config(request: BacktestRequest, run_id: str) -> dict[str, Any]:
     }
 
 
+def _experiment_metadata(
+    *,
+    request: BacktestRequest,
+    run_id: str,
+    environment_metadata: dict[str, Any],
+    config: dict[str, Any],
+    output_files: dict[str, Path],
+) -> dict[str, Any]:
+    backtest = config["backtest"]
+    return {
+        "schema_version": 1,
+        "metadata_available": True,
+        "experiment_name": request.experiment_name,
+        "run_id": run_id,
+        "created_at_utc": environment_metadata.get("created_at_utc"),
+        "project": {
+            "package_version": environment_metadata.get("package_version"),
+            "git_commit": environment_metadata.get("git_commit"),
+            "git_dirty": environment_metadata.get("git_dirty"),
+            "python_version": environment_metadata.get("python_version"),
+            "platform": environment_metadata.get("platform"),
+            "pandas_version": environment_metadata.get("pandas_version"),
+        },
+        "data": {
+            "data_dir": str(request.data_dir),
+            "symbols": [request.symbol],
+            "interval": request.interval,
+            "start": request.start,
+            "end": request.end,
+            "price_column": request.price_column,
+        },
+        "strategy": {
+            "name": request.strategy_key,
+            "parameters": request.strategy_parameters,
+        },
+        "costs": {
+            "commission_bps": request.commission_bps,
+            "slippage_bps": request.slippage_bps,
+        },
+        "risk": {
+            "position_fraction": backtest.get("position_fraction"),
+            "max_total_exposure": backtest.get("max_total_exposure"),
+            "max_drawdown_pct": backtest.get("max_drawdown_pct"),
+            "max_trades_per_day": backtest.get("max_trades_per_day"),
+            "stop_loss_pct": backtest.get("stop_loss_pct"),
+            "take_profit_pct": backtest.get("take_profit_pct"),
+            "volatility_target_pct": backtest.get("volatility_target_pct"),
+            "volatility_window": backtest.get("volatility_window"),
+        },
+        "config": config,
+        "outputs": {key: str(path) for key, path in output_files.items()},
+    }
+
+
 def _summary_row(symbol: str, strategy_name: str, result: BacktestResult) -> dict[str, Any]:
     metrics = result.metrics
     return {
@@ -501,14 +576,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _json_safe(metrics: dict[str, float | int]) -> dict[str, float | int | None]:
-    result = {}
-    for key, value in metrics.items():
-        if isinstance(value, float) and math.isnan(value):
-            result[key] = None
-        else:
-            result[key] = value
-    return result
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
 
 
 def _format_metric(key: str, value: float | int | None) -> str:

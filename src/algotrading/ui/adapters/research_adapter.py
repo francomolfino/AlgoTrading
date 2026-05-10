@@ -21,6 +21,7 @@ from algotrading.ui.adapters.verdict_adapter import ResearchVerdict, build_resea
 
 
 RESEARCH_DIR = "research"
+EXPERIMENT_METADATA_FILENAME = "experiment_metadata.json"
 ROBUSTNESS_REQUEST = "robustness_request.json"
 ROBUSTNESS_DIAGNOSTICS = "robustness_diagnostics.csv"
 ROBUSTNESS_TRAIN_TEST = "robustness_train_test.csv"
@@ -29,6 +30,35 @@ ROBUSTNESS_REGIMES = "robustness_regimes.csv"
 STRESS_REQUEST = "stress_request.json"
 STRESS_METADATA = "stress_metadata.json"
 STRESS_COMPARISON = "stress_comparison.csv"
+
+PIPELINE_BACKTEST_CREATED = "Backtest creado"
+PIPELINE_RESULTS_REVIEWED = "Resultados revisados"
+PIPELINE_ROBUSTNESS_DONE = "Robustez corrida"
+PIPELINE_STRESS_DONE = "Stress test corrido"
+PIPELINE_JOURNAL_COMPLETED = "Journal completado"
+PIPELINE_PAPER_CANDIDATE = "Candidato a paper trading"
+PIPELINE_REJECTED = "Rechazado"
+PIPELINE_ARCHIVED = "Archivado"
+
+TERMINAL_JOURNAL_STATUS_TO_PIPELINE = {
+    "Paper Simulation Candidate": PIPELINE_PAPER_CANDIDATE,
+    "Rejected": PIPELINE_REJECTED,
+    "Archived": PIPELINE_ARCHIVED,
+}
+
+
+@dataclass(frozen=True)
+class ResearchPipelineStep:
+    name: str
+    completed: bool
+    source: str
+
+
+@dataclass(frozen=True)
+class ComparisonFairnessIssue:
+    category: str
+    message: str
+    severity: str = "warning"
 
 
 @dataclass(frozen=True)
@@ -44,10 +74,14 @@ class ResearchSummary:
     journal_conclusion: str
     journal_next_test: str
     journal_favorite: bool
+    has_journal: bool
+    pipeline_state: str
+    pipeline_steps: tuple[ResearchPipelineStep, ...]
     has_robustness: bool
     robustness_summary: dict[str, Any] | None
     has_stress: bool
     stress_summary: dict[str, Any] | None
+    experiment_metadata: dict[str, Any]
     recommended_next_action: str
     critical_flags: tuple[str, ...]
 
@@ -65,6 +99,15 @@ def build_research_summary(experiment_dir: Path | str) -> ResearchSummary:
     )
     robustness_summary = summarize_robustness(robustness)
     stress_summary = summarize_stress(stress)
+    has_journal = _has_journal(notes)
+    pipeline_steps = build_pipeline_steps(
+        details=details,
+        notes=notes,
+        has_robustness=robustness is not None,
+        has_stress=stress is not None,
+    )
+    pipeline_state = derive_pipeline_state(notes=notes, steps=pipeline_steps)
+    experiment_metadata = load_experiment_metadata(experiment_dir, details=details)
     flags = _critical_flags(verdict, robustness_summary, stress_summary)
     return ResearchSummary(
         experiment_id=details.config.get("run_id", details.path.name),
@@ -78,10 +121,14 @@ def build_research_summary(experiment_dir: Path | str) -> ResearchSummary:
         journal_conclusion=notes.conclusion,
         journal_next_test=notes.next_test,
         journal_favorite=notes.favorite,
+        has_journal=has_journal,
+        pipeline_state=pipeline_state,
+        pipeline_steps=pipeline_steps,
         has_robustness=robustness is not None,
         robustness_summary=robustness_summary,
         has_stress=stress is not None,
         stress_summary=stress_summary,
+        experiment_metadata=experiment_metadata,
         recommended_next_action=recommend_next_action(
             verdict=verdict,
             evidence_score=evidence_score,
@@ -108,26 +155,148 @@ def research_records_frame(records: list[ExperimentRecord]) -> pd.DataFrame:
     rows = []
     for record in records:
         summary = summaries_by_path.get(str(record.path))
-        rows.append(
-            {
-                "name": record.name,
-                "run_id": record.run_id,
-                "created_at": record.created_at,
-                "strategy": record.strategy,
-                "symbols": ", ".join(record.symbols),
-                "journal_status": summary.journal_state if summary else record.status,
-                "evidence_score": summary.evidence_score.score if summary else None,
-                "has_robustness": bool(summary and summary.has_robustness),
-                "has_stress": bool(summary and summary.has_stress),
-                "favorite": summary.journal_favorite if summary else record.favorite,
-                "tags": ", ".join(summary.journal_tags if summary else record.tags),
-                "total_return": record.total_return,
-                "sharpe_ratio": record.sharpe_ratio,
-                "max_drawdown": record.max_drawdown,
-                "path": str(record.path),
-            }
-        )
+        rows.append(_research_record_row(record, summary))
     return pd.DataFrame(rows)
+
+
+def research_records_frame_from_paths(paths: tuple[str, ...] | list[str]) -> pd.DataFrame:
+    rows = []
+    for path_value in paths:
+        try:
+            summary = build_research_summary(path_value)
+        except Exception:
+            continue
+        rows.append(_research_summary_row(summary))
+    return pd.DataFrame(rows)
+
+
+def research_records_cache_signature(records: list[ExperimentRecord]) -> tuple[tuple[str, float], ...]:
+    return tuple(
+        (str(record.path), _experiment_fingerprint(record.path))
+        for record in records
+    )
+
+
+def build_pipeline_steps(
+    *,
+    details: ExperimentDetails,
+    notes: ResearchNotes,
+    has_robustness: bool,
+    has_stress: bool,
+) -> tuple[ResearchPipelineStep, ...]:
+    return (
+        ResearchPipelineStep(
+            PIPELINE_BACKTEST_CREATED,
+            completed=bool(details.config and not details.summary.empty and bool(details.metrics)),
+            source="config/summary/metrics",
+        ),
+        ResearchPipelineStep(
+            PIPELINE_RESULTS_REVIEWED,
+            completed=_has_journal(notes),
+            source="research_notes.json",
+        ),
+        ResearchPipelineStep(
+            PIPELINE_ROBUSTNESS_DONE,
+            completed=has_robustness,
+            source=f"{RESEARCH_DIR}/{ROBUSTNESS_DIAGNOSTICS}",
+        ),
+        ResearchPipelineStep(
+            PIPELINE_STRESS_DONE,
+            completed=has_stress,
+            source=f"{RESEARCH_DIR}/{STRESS_COMPARISON}",
+        ),
+        ResearchPipelineStep(
+            PIPELINE_JOURNAL_COMPLETED,
+            completed=_journal_completed(notes),
+            source="research_notes.json",
+        ),
+    )
+
+
+def derive_pipeline_state(
+    *,
+    notes: ResearchNotes,
+    steps: tuple[ResearchPipelineStep, ...],
+) -> str:
+    terminal = TERMINAL_JOURNAL_STATUS_TO_PIPELINE.get(notes.status)
+    if terminal:
+        return terminal
+    completed = {step.name for step in steps if step.completed}
+    if {
+        PIPELINE_ROBUSTNESS_DONE,
+        PIPELINE_STRESS_DONE,
+        PIPELINE_JOURNAL_COMPLETED,
+    }.issubset(completed):
+        return PIPELINE_JOURNAL_COMPLETED
+    if PIPELINE_STRESS_DONE in completed:
+        return PIPELINE_STRESS_DONE
+    if PIPELINE_ROBUSTNESS_DONE in completed:
+        return PIPELINE_ROBUSTNESS_DONE
+    if PIPELINE_RESULTS_REVIEWED in completed:
+        return PIPELINE_RESULTS_REVIEWED
+    return PIPELINE_BACKTEST_CREATED
+
+
+def load_experiment_metadata(
+    experiment_dir: Path | str,
+    *,
+    details: ExperimentDetails | None = None,
+) -> dict[str, Any]:
+    directory = Path(experiment_dir)
+    path = directory / EXPERIMENT_METADATA_FILENAME
+    if path.exists():
+        payload = _read_json(path)
+        if payload:
+            payload.setdefault("metadata_available", True)
+            return payload
+    details = details or load_experiment_details(directory)
+    return _fallback_experiment_metadata(details)
+
+
+def compare_experiment_fairness(records: list[ExperimentRecord]) -> list[ComparisonFairnessIssue]:
+    if len(records) < 2:
+        return []
+    details = []
+    for record in records:
+        try:
+            details.append(load_experiment_details(record.path))
+        except Exception:
+            continue
+    if len(details) < 2:
+        return []
+
+    issues: list[ComparisonFairnessIssue] = []
+    _add_issue_if_multiple(
+        issues,
+        "Activos",
+        "Los experimentos usan activos distintos; comparar retornos directos puede ser enganoso.",
+        [_symbols_key(item) for item in details],
+    )
+    _add_issue_if_multiple(
+        issues,
+        "Periodos",
+        "Los experimentos usan fechas distintas; el ranking puede depender del periodo.",
+        [_period_key(item) for item in details],
+    )
+    _add_issue_if_multiple(
+        issues,
+        "Benchmark",
+        "La comparacion contra benchmark no es equivalente o no esta disponible en todos.",
+        [_benchmark_key(item) for item in details],
+    )
+    _add_issue_if_multiple(
+        issues,
+        "Costos",
+        "Comision o slippage difieren entre experimentos.",
+        [_costs_key(item) for item in details],
+    )
+    _add_issue_if_multiple(
+        issues,
+        "Risk settings",
+        "Las reglas de risk management difieren entre experimentos.",
+        [_risk_key(item) for item in details],
+    )
+    return issues
 
 
 def save_robustness_for_experiment(
@@ -260,6 +429,230 @@ def suggested_journal_status(summary: ResearchSummary) -> str:
         stress_result=stress,
         fallback=summary.journal_state or "Needs Review",
     )
+
+
+def _research_record_row(record: ExperimentRecord, summary: ResearchSummary | None) -> dict[str, Any]:
+    if summary is None:
+        return {
+            "name": record.name,
+            "run_id": record.run_id,
+            "created_at": record.created_at,
+            "strategy": record.strategy,
+            "symbols": ", ".join(record.symbols),
+            "pipeline_state": PIPELINE_BACKTEST_CREATED,
+            "journal_status": record.status,
+            "evidence_score": None,
+            "has_robustness": False,
+            "has_stress": False,
+            "has_journal": False,
+            "favorite": record.favorite,
+            "tags": ", ".join(record.tags),
+            "total_return": record.total_return,
+            "sharpe_ratio": record.sharpe_ratio,
+            "max_drawdown": record.max_drawdown,
+            "path": str(record.path),
+        }
+    return _research_summary_row(summary)
+
+
+def _research_summary_row(summary: ResearchSummary) -> dict[str, Any]:
+    details = summary.details
+    first_row = details.summary.iloc[0].to_dict() if not details.summary.empty else {}
+    config = details.config if isinstance(details.config, dict) else {}
+    strategy_config = config.get("strategy", {}) if isinstance(config.get("strategy", {}), dict) else {}
+    symbols = config.get("symbols", [])
+    if not isinstance(symbols, list):
+        symbols = [details.symbol] if details.symbol else []
+    return {
+        "name": str(config.get("experiment_name", details.path.name)),
+        "run_id": str(config.get("run_id", details.path.name)),
+        "created_at": str(details.metadata.get("created_at_utc", "")),
+        "strategy": str(first_row.get("strategy") or strategy_config.get("name", "")),
+        "symbols": ", ".join(str(symbol) for symbol in symbols),
+        "pipeline_state": summary.pipeline_state,
+        "journal_status": summary.journal_state,
+        "evidence_score": summary.evidence_score.score,
+        "has_robustness": summary.has_robustness,
+        "has_stress": summary.has_stress,
+        "has_journal": summary.has_journal,
+        "favorite": summary.journal_favorite,
+        "tags": ", ".join(summary.journal_tags),
+        "total_return": _optional_float(first_row.get("total_return")),
+        "sharpe_ratio": _optional_float(first_row.get("sharpe_ratio")),
+        "max_drawdown": _optional_float(first_row.get("max_drawdown")),
+        "path": str(details.path),
+    }
+
+
+def _experiment_fingerprint(experiment_dir: Path | str) -> float:
+    directory = Path(experiment_dir)
+    paths = [
+        directory / "config.json",
+        directory / "metadata.json",
+        directory / "summary.csv",
+        directory / "research_notes.json",
+        directory / EXPERIMENT_METADATA_FILENAME,
+        directory / RESEARCH_DIR / ROBUSTNESS_DIAGNOSTICS,
+        directory / RESEARCH_DIR / STRESS_COMPARISON,
+        directory / RESEARCH_DIR / STRESS_METADATA,
+    ]
+    mtimes = [path.stat().st_mtime for path in paths if path.exists()]
+    return max(mtimes) if mtimes else 0.0
+
+
+def _has_journal(notes: ResearchNotes) -> bool:
+    return any(
+        [
+            notes.updated_at_utc,
+            notes.status != "Draft",
+            notes.hypothesis.strip(),
+            notes.conclusion.strip(),
+            notes.next_test.strip(),
+            notes.tags,
+            notes.favorite,
+        ]
+    )
+
+
+def _journal_completed(notes: ResearchNotes) -> bool:
+    return bool(
+        notes.hypothesis.strip()
+        and notes.conclusion.strip()
+        and notes.next_test.strip()
+    )
+
+
+def _fallback_experiment_metadata(details: ExperimentDetails) -> dict[str, Any]:
+    config = details.config if isinstance(details.config, dict) else {}
+    backtest = config.get("backtest", {}) if isinstance(config.get("backtest", {}), dict) else {}
+    strategy = config.get("strategy", {}) if isinstance(config.get("strategy", {}), dict) else {}
+    metadata = details.metadata if isinstance(details.metadata, dict) else {}
+    return {
+        "schema_version": 1,
+        "metadata_available": False,
+        "experiment_name": config.get("experiment_name", "no disponible"),
+        "run_id": config.get("run_id", details.path.name),
+        "created_at_utc": metadata.get("created_at_utc", "no disponible"),
+        "project": {
+            "package_version": metadata.get("package_version", "no disponible"),
+            "git_commit": metadata.get("git_commit", "no disponible"),
+            "git_dirty": metadata.get("git_dirty", "no disponible"),
+        },
+        "data": {
+            "data_dir": config.get("data_dir", "no disponible"),
+            "symbols": config.get("symbols", []),
+            "interval": config.get("interval", "no disponible"),
+            "start": config.get("start") or _summary_value(details, "start_date"),
+            "end": config.get("end") or _summary_value(details, "end_date"),
+            "price_column": config.get("price_column", "no disponible"),
+        },
+        "strategy": {
+            "name": strategy.get("name", "no disponible"),
+            "parameters": strategy.get("parameters", {}),
+        },
+        "costs": {
+            "commission_bps": backtest.get("commission_bps", "no disponible"),
+            "slippage_bps": backtest.get("slippage_bps", "no disponible"),
+        },
+        "risk": _risk_payload(backtest),
+        "outputs": _discover_output_files(details.path),
+    }
+
+
+def _summary_value(details: ExperimentDetails, key: str) -> str:
+    if details.summary.empty or key not in details.summary:
+        return "no disponible"
+    value = details.summary[key].iloc[0]
+    return "no disponible" if pd.isna(value) else str(value)
+
+
+def _risk_payload(backtest: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "position_fraction",
+        "max_total_exposure",
+        "max_drawdown_pct",
+        "max_trades_per_day",
+        "stop_loss_pct",
+        "take_profit_pct",
+        "volatility_target_pct",
+        "volatility_window",
+    )
+    return {key: backtest.get(key, "no disponible") for key in keys}
+
+
+def _discover_output_files(experiment_dir: Path) -> dict[str, str]:
+    paths = {
+        "config": experiment_dir / "config.json",
+        "metadata": experiment_dir / "metadata.json",
+        "summary": experiment_dir / "summary.csv",
+        "notes": experiment_dir / "notes.md",
+        "research_notes": experiment_dir / "research_notes.json",
+    }
+    outputs = {
+        key: str(path)
+        for key, path in paths.items()
+        if path.exists()
+    }
+    children = experiment_dir.iterdir() if experiment_dir.exists() else []
+    for child in children:
+        if child.is_dir() and child.name != RESEARCH_DIR and (child / "metrics.json").exists():
+            outputs[f"{child.name}_metrics"] = str(child / "metrics.json")
+            outputs[f"{child.name}_equity"] = str(child / "equity.csv")
+            outputs[f"{child.name}_trades"] = str(child / "trades.csv")
+            outputs[f"{child.name}_orders"] = str(child / "orders.csv")
+    return outputs
+
+
+def _add_issue_if_multiple(
+    issues: list[ComparisonFairnessIssue],
+    category: str,
+    message: str,
+    values: list[object],
+) -> None:
+    if len({str(value) for value in values}) > 1:
+        issues.append(ComparisonFairnessIssue(category=category, message=message))
+
+
+def _symbols_key(details: ExperimentDetails) -> tuple[str, ...]:
+    symbols = details.config.get("symbols", []) if isinstance(details.config, dict) else []
+    if isinstance(symbols, list) and symbols:
+        return tuple(str(symbol) for symbol in symbols)
+    return (str(details.symbol),) if details.symbol else ()
+
+
+def _period_key(details: ExperimentDetails) -> tuple[str, str]:
+    config = details.config if isinstance(details.config, dict) else {}
+    return (
+        str(config.get("start") or _summary_value(details, "start_date")),
+        str(config.get("end") or _summary_value(details, "end_date")),
+    )
+
+
+def _benchmark_key(details: ExperimentDetails) -> str:
+    config = details.config if isinstance(details.config, dict) else {}
+    benchmark = config.get("benchmark")
+    if benchmark:
+        return str(benchmark)
+    if details.metrics and "benchmark_total_return" in details.metrics:
+        return "buy_and_hold"
+    return "no disponible"
+
+
+def _costs_key(details: ExperimentDetails) -> tuple[object, object]:
+    backtest = details.config.get("backtest", {}) if isinstance(details.config, dict) else {}
+    if not isinstance(backtest, dict):
+        return ("no disponible", "no disponible")
+    return (
+        backtest.get("commission_bps", "no disponible"),
+        backtest.get("slippage_bps", "no disponible"),
+    )
+
+
+def _risk_key(details: ExperimentDetails) -> tuple[tuple[str, object], ...]:
+    backtest = details.config.get("backtest", {}) if isinstance(details.config, dict) else {}
+    if not isinstance(backtest, dict):
+        return ()
+    return tuple(sorted(_risk_payload(backtest).items()))
 
 
 def _critical_flags(

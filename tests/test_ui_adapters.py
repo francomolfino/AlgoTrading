@@ -59,10 +59,18 @@ from algotrading.ui.adapters.portfolio_adapter import (
 )
 from algotrading.ui.adapters.reports_adapter import build_experiment_zip, collect_experiment_report_files
 from algotrading.ui.adapters.research_adapter import (
+    PIPELINE_BACKTEST_CREATED,
+    PIPELINE_JOURNAL_COMPLETED,
+    PIPELINE_ROBUSTNESS_DONE,
+    PIPELINE_STRESS_DONE,
     build_research_summary,
+    compare_experiment_fairness,
+    load_experiment_metadata,
     load_robustness_for_experiment,
     load_stress_for_experiment,
+    research_records_cache_signature,
     research_records_frame,
+    research_records_frame_from_paths,
     save_robustness_for_experiment,
     save_stress_for_experiment,
 )
@@ -622,6 +630,11 @@ def test_research_adapter_persists_associated_validation_and_builds_summary():
         )
     )
     record = list_experiments(experiments_dir)[0]
+    initial_summary = build_research_summary(record.path)
+
+    assert initial_summary.pipeline_state == PIPELINE_BACKTEST_CREATED
+    assert initial_summary.has_journal is False
+
     save_research_notes(
         record.path,
         ResearchNotes(
@@ -633,6 +646,10 @@ def test_research_adapter_persists_associated_validation_and_builds_summary():
             favorite=True,
         ),
     )
+    journal_summary = build_research_summary(record.path)
+    assert journal_summary.pipeline_state == "Resultados revisados"
+    assert journal_summary.has_journal is True
+
     robustness = RobustnessResult(
         train_test=pd.DataFrame([{"symbol": "SPY", "strategy": "sma_cross_3_5"}]),
         walk_forward=pd.DataFrame([{"symbol": "SPY", "strategy": "sma_cross_3_5"}]),
@@ -682,9 +699,15 @@ def test_research_adapter_persists_associated_validation_and_builds_summary():
     )
 
     save_robustness_for_experiment(record.path, robustness_request, robustness)
+    robustness_summary = build_research_summary(record.path)
+    assert robustness_summary.has_robustness is True
+    assert any(step.name == PIPELINE_ROBUSTNESS_DONE and step.completed for step in robustness_summary.pipeline_steps)
+
     save_stress_for_experiment(record.path, stress)
     summary = build_research_summary(record.path)
     frame = research_records_frame([record])
+    cached_frame = research_records_frame_from_paths(tuple(path for path, _ in research_records_cache_signature([record])))
+    notes_after_validation = load_research_notes(record.path)
 
     assert artifacts.experiment_dir == record.path
     assert load_robustness_for_experiment(record.path) is not None
@@ -692,11 +715,102 @@ def test_research_adapter_persists_associated_validation_and_builds_summary():
     assert summary.has_robustness is True
     assert summary.has_stress is True
     assert summary.journal_state == "Promising"
+    assert summary.pipeline_state == PIPELINE_JOURNAL_COMPLETED
+    assert any(step.name == PIPELINE_STRESS_DONE and step.completed for step in summary.pipeline_steps)
     assert summary.journal_favorite is True
     assert summary.stress_summary["conclusion"] == "Robusta"
+    assert notes_after_validation.hypothesis == "Cruce corto captura tramo tendencial."
+    assert notes_after_validation.conclusion == "Sirve para seguir validando, no para operar."
+    assert summary.experiment_metadata["metadata_available"] is True
     assert "evidence_score" in frame.columns
+    assert "pipeline_state" in frame.columns
+    assert "has_journal" in frame.columns
+    assert cached_frame.loc[0, "pipeline_state"] == summary.pipeline_state
     assert bool(frame.loc[0, "has_robustness"]) is True
     assert bool(frame.loc[0, "has_stress"]) is True
+    assert bool(frame.loc[0, "has_journal"]) is True
+
+
+def test_research_adapter_loads_fallback_metadata_for_old_experiments():
+    root = _workspace_tmp("research_metadata_fallback")
+    data_dir = root / "data"
+    experiments_dir = root / "experiments"
+    save_ohlcv(_frame(list(range(100, 380))), data_dir / "SPY_1D.csv")
+    run_backtest_request(
+        BacktestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            experiment_name="metadata_fallback",
+            experiments_root=experiments_dir,
+        )
+    )
+    record = list_experiments(experiments_dir)[0]
+    metadata_path = record.path / "experiment_metadata.json"
+    saved_metadata = load_experiment_metadata(record.path)
+    metadata_path.unlink()
+    fallback = load_experiment_metadata(record.path)
+
+    assert saved_metadata["metadata_available"] is True
+    assert saved_metadata["strategy"]["name"] == "sma_cross"
+    assert saved_metadata["outputs"]["config"].endswith("config.json")
+    assert fallback["metadata_available"] is False
+    assert fallback["strategy"]["name"] == "sma_cross"
+    assert "git_commit" in fallback["project"]
+
+
+def test_research_adapter_detects_unfair_experiment_comparisons():
+    root = _workspace_tmp("research_fairness")
+    data_dir = root / "data"
+    experiments_dir = root / "experiments"
+    prices = list(range(100, 430))
+    save_ohlcv(_frame(prices), data_dir / "SPY_1D.csv")
+    save_ohlcv(_frame([price * 2 for price in prices]), data_dir / "QQQ_1D.csv")
+    run_backtest_request(
+        BacktestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            start="2024-01-01",
+            commission_bps=1,
+            slippage_bps=2,
+            risk=RiskSettings(position_fraction=1.0),
+            experiment_name="fair_spy",
+            experiments_root=experiments_dir,
+        )
+    )
+    run_backtest_request(
+        BacktestRequest(
+            symbol="QQQ",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            start="2024-03-01",
+            commission_bps=5,
+            slippage_bps=8,
+            risk=RiskSettings(position_fraction=0.5),
+            experiment_name="fair_qqq",
+            experiments_root=experiments_dir,
+        )
+    )
+    issues = compare_experiment_fairness(list_experiments(experiments_dir))
+    categories = {issue.category for issue in issues}
+
+    assert {"Activos", "Periodos", "Costos", "Risk settings"}.issubset(categories)
+
+
+def test_research_page_is_compatibility_layer_only():
+    source = Path("src/algotrading/ui/pages/research.py").read_text(encoding="utf-8")
+    from algotrading.ui.pages import research
+
+    assert "def render_" not in source
+    assert "Compatibility layer" in source
+    assert callable(research.render_results_dashboard)
 
 
 def test_ui_backtest_preflight_blocks_short_period():

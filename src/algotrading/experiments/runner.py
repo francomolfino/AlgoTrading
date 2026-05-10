@@ -111,6 +111,16 @@ def run_experiment(config: Mapping[str, Any]) -> ExperimentRunResult:
         )
         figure.savefig(figures_dir / "equity_comparison.png", dpi=140, bbox_inches="tight")
 
+    _write_json(
+        experiment_dir / "experiment_metadata.json",
+        _experiment_metadata(
+            config=normalized,
+            metadata=metadata,
+            experiment_dir=experiment_dir,
+            summary_path=summary_path,
+        ),
+    )
+
     return ExperimentRunResult(
         experiment_dir=experiment_dir,
         summary=summary,
@@ -343,6 +353,81 @@ def _summary_row(symbol: str, strategy_name: str, result: BacktestResult) -> dic
         "benchmark_total_return": metrics["benchmark_total_return"],
         "excess_return_vs_benchmark": metrics["excess_return_vs_benchmark"],
     }
+
+
+def _experiment_metadata(
+    *,
+    config: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    experiment_dir: Path,
+    summary_path: Path,
+) -> dict[str, Any]:
+    backtest = dict(config.get("backtest", {}))
+    return {
+        "schema_version": 1,
+        "metadata_available": True,
+        "experiment_name": config.get("experiment_name"),
+        "run_id": config.get("run_id"),
+        "created_at_utc": metadata.get("created_at_utc"),
+        "project": {
+            "package_version": metadata.get("package_version"),
+            "git_commit": metadata.get("git_commit"),
+            "git_dirty": metadata.get("git_dirty"),
+            "python_version": metadata.get("python_version"),
+            "platform": metadata.get("platform"),
+            "pandas_version": metadata.get("pandas_version"),
+        },
+        "data": {
+            "data_dir": config.get("data_dir"),
+            "symbols": config.get("symbols", []),
+            "interval": config.get("interval"),
+            "start": config.get("start"),
+            "end": config.get("end"),
+            "price_column": config.get("price_column"),
+        },
+        "strategy": dict(config.get("strategy", {})),
+        "costs": {
+            "commission_bps": backtest.get("commission_bps", 1.0),
+            "slippage_bps": backtest.get("slippage_bps", 2.0),
+        },
+        "risk": {
+            key: backtest.get(key)
+            for key in (
+                "position_fraction",
+                "max_total_exposure",
+                "max_drawdown_pct",
+                "max_trades_per_day",
+                "stop_loss_pct",
+                "take_profit_pct",
+                "volatility_target_pct",
+                "volatility_window",
+            )
+        },
+        "config": dict(config),
+        "outputs": _experiment_output_files(config, experiment_dir, summary_path),
+    }
+
+
+def _experiment_output_files(
+    config: Mapping[str, Any],
+    experiment_dir: Path,
+    summary_path: Path,
+) -> dict[str, str]:
+    outputs = {
+        "config": str(experiment_dir / "config.json"),
+        "metadata": str(experiment_dir / "metadata.json"),
+        "summary": str(summary_path),
+        "figures": str(experiment_dir / "figures"),
+    }
+    for symbol in config.get("symbols", []):
+        symbol_dir = experiment_dir / safe_filename_part(str(symbol))
+        prefix = safe_filename_part(str(symbol))
+        outputs[f"{prefix}_equity"] = str(symbol_dir / "equity.csv")
+        outputs[f"{prefix}_trades"] = str(symbol_dir / "trades.csv")
+        outputs[f"{prefix}_orders"] = str(symbol_dir / "orders.csv")
+        outputs[f"{prefix}_metrics"] = str(symbol_dir / "metrics.json")
+        outputs[f"{prefix}_report"] = str(symbol_dir / "report.md")
+    return outputs
 
 
 def _experiment_dir(output_root: Path, config: Mapping[str, Any]) -> Path:

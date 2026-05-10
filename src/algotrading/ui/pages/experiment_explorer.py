@@ -25,8 +25,19 @@ def render_experiment_explorer() -> None:
         favorites_only=favorites_only,
     )
     filtered = sort_records(filtered, sort_by)
-    frame = research_records_frame(filtered)
-    st.dataframe(frame, width="stretch", hide_index=True)
+    frame = _cached_research_records_frame(research_records_cache_signature(filtered))
+    display_frame = _explorer_display_frame(frame)
+    st.dataframe(
+        display_frame,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "evidence_score": st.column_config.NumberColumn("Evidence", format="%.1f"),
+            "total_return": st.column_config.NumberColumn("Retorno", format="%.2%%"),
+            "sharpe_ratio": st.column_config.NumberColumn("Sharpe", format="%.2f"),
+            "max_drawdown": st.column_config.NumberColumn("Max DD", format="%.2%%"),
+        },
+    )
     if not filtered:
         st.info("No hay experimentos para esos filtros.")
         return
@@ -75,6 +86,11 @@ def render_experiment_explorer() -> None:
             )
         if _comparison_has_mismatch(comparison):
             st.warning("Estas comparando activos o periodos distintos. El ranking puede ser enganoso.")
+        fairness_issues = compare_experiment_fairness(selected_records)
+        if fairness_issues:
+            st.subheader("Advertencias de comparacion")
+            for issue in fairness_issues:
+                st.warning(f"{issue.category}: {issue.message}")
         if len(selected_records) >= 2:
             with st.expander("Diferencias de configuracion", expanded=False):
                 only_changed = st.checkbox("Mostrar solo campos distintos", value=True)
@@ -178,3 +194,16 @@ def _render_experiment_journal(records: list[ExperimentRecord]) -> None:
                 st.rerun()
             except Exception as exc:
                 _show_error(exc)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_research_records_frame(signature: tuple[tuple[str, float], ...]):
+    return research_records_frame_from_paths(tuple(path for path, _fingerprint in signature))
+
+
+def _explorer_display_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    for column in ["has_robustness", "has_stress", "has_journal", "favorite"]:
+        if column in display:
+            display[column] = display[column].map(lambda value: "si" if bool(value) else "no")
+    return display
