@@ -17,6 +17,7 @@ from algotrading.ui.adapters.experiment_adapter import list_experiments
 from algotrading.ui.adapters.paper_adapter import (
     PaperTradingRequest,
     build_paper_replay_frame,
+    replay_display_columns,
     run_paper_trading_request,
 )
 from algotrading.ui.adapters.preset_adapter import (
@@ -270,6 +271,43 @@ def test_paper_replay_frame_handles_orders_and_empty_fills():
     assert len(replay) == len(result.account_history)
     assert {"bar", "date", "next_target_weight", "order_status", "cash", "equity"}.issubset(replay.columns)
     assert replay["equity"].notna().all()
+
+
+def test_paper_replay_explains_timing_risk_broker_and_account_state():
+    root = _workspace_tmp("paper_replay_explained")
+    data_dir = root / "data"
+    save_ohlcv(_frame([100, 101, 102, 103, 104, 105]), data_dir / "SPY_1D.csv")
+
+    result = run_paper_trading_request(
+        PaperTradingRequest(
+            symbol="SPY",
+            strategy_key="buy_and_hold",
+            strategy_parameters={},
+            data_dir=data_dir,
+            interval="1d",
+        )
+    )
+    replay = build_paper_replay_frame(result)
+    display_columns = replay_display_columns(replay)
+
+    expected_columns = {
+        "decision",
+        "current_weight",
+        "timing_explanation",
+        "signal_explanation",
+        "risk_explanation",
+        "broker_explanation",
+        "account_explanation",
+        "step_summary",
+    }
+    assert expected_columns.issubset(replay.columns)
+    assert expected_columns.intersection(display_columns)
+    assert replay["timing_explanation"].str.contains("evitando lookahead").all()
+    assert replay["signal_explanation"].str.len().gt(0).all()
+    assert replay["risk_explanation"].str.len().gt(0).all()
+    assert replay["broker_explanation"].str.len().gt(0).all()
+    assert replay["account_explanation"].str.contains("Equity").all()
+    assert any(replay["decision"].str.contains("Compra|Mantener", regex=True))
 
 
 def test_examples_are_valid_json():

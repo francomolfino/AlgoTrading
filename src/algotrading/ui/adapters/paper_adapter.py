@@ -96,27 +96,78 @@ def build_paper_replay_frame(result: PaperTradingResult) -> pd.DataFrame:
     for index, row in account.reset_index(drop=True).iterrows():
         timestamp = row["date"]
         key = _timestamp_key(timestamp)
+        price = _to_float(row.get("price"))
+        equity = _to_float(row.get("equity"))
+        cash = _to_float(row.get("cash"))
+        position_quantity = _to_float(row.get("position_quantity"))
+        executed_target_weight = _to_float(row.get("executed_target_weight"))
+        next_target_weight = _to_float(row.get("next_target_weight"))
+        current_position_value = position_quantity * price
+        current_weight = current_position_value / equity if equity > 0 else 0.0
+        action = _clean_text(row.get("action", ""))
+        risk_event = _clean_text(row.get("risk_event", ""))
+        blocked_reason = _clean_text(row.get("blocked_reason", ""))
+        order_text = orders.get(key, "")
+        event_text = events.get(key, "")
+        fill_text = fills.get(key, "")
+        decision = _decision_label(
+            action=action,
+            order_text=order_text,
+            risk_event=risk_event,
+            blocked_reason=blocked_reason,
+            executed_target_weight=executed_target_weight,
+            current_weight=current_weight,
+        )
         rows.append(
             {
                 "bar": index + 1,
                 "date": timestamp,
                 "symbol": row.get("symbol", ""),
-                "price": row.get("price"),
-                "executed_target_weight": row.get("executed_target_weight"),
-                "next_target_weight": row.get("next_target_weight"),
-                "action": row.get("action", ""),
-                "risk_event": row.get("risk_event", ""),
-                "blocked_reason": row.get("blocked_reason", ""),
-                "order_status": events.get(key, ""),
-                "order": orders.get(key, ""),
-                "fill": fills.get(key, ""),
+                "price": price,
+                "executed_target_weight": executed_target_weight,
+                "next_target_weight": next_target_weight,
+                "current_weight": current_weight,
+                "current_position_value": current_position_value,
+                "action": action,
+                "decision": decision,
+                "risk_event": risk_event,
+                "blocked_reason": blocked_reason,
+                "order_status": event_text,
+                "order": order_text,
+                "fill": fill_text,
                 "fill_price": row.get("fill_price"),
                 "fill_quantity": row.get("fill_quantity"),
                 "commission": row.get("commission"),
-                "cash": row.get("cash"),
-                "position_quantity": row.get("position_quantity"),
-                "equity": row.get("equity"),
+                "cash": cash,
+                "position_quantity": position_quantity,
+                "equity": equity,
                 "drawdown": row.get("drawdown"),
+                "timing_explanation": _timing_explanation(),
+                "signal_explanation": _signal_explanation(
+                    executed_target_weight,
+                    next_target_weight,
+                ),
+                "risk_explanation": _risk_explanation(
+                    risk_event=risk_event,
+                    blocked_reason=blocked_reason,
+                    order_text=order_text,
+                    executed_target_weight=executed_target_weight,
+                    current_weight=current_weight,
+                ),
+                "broker_explanation": _broker_explanation(
+                    action=action,
+                    order_text=order_text,
+                    event_text=event_text,
+                    fill_text=fill_text,
+                ),
+                "account_explanation": _account_explanation(
+                    equity=equity,
+                    cash=cash,
+                    current_weight=current_weight,
+                    position_quantity=position_quantity,
+                    drawdown=_to_float(row.get("drawdown")),
+                ),
+                "step_summary": _step_summary(decision, action, risk_event, blocked_reason, fill_text),
             }
         )
     return pd.DataFrame(rows)
@@ -127,6 +178,29 @@ def replay_snapshot(replay: pd.DataFrame, position: int) -> dict[str, object]:
         return {}
     position = max(0, min(int(position), len(replay) - 1))
     return replay.iloc[position].to_dict()
+
+
+def replay_display_columns(replay: pd.DataFrame) -> list[str]:
+    """Columnas mas utiles para leer el replay en UI sin perder auditabilidad."""
+    preferred = [
+        "bar",
+        "date",
+        "price",
+        "decision",
+        "executed_target_weight",
+        "next_target_weight",
+        "current_weight",
+        "order",
+        "fill",
+        "risk_event",
+        "blocked_reason",
+        "cash",
+        "position_quantity",
+        "equity",
+        "drawdown",
+        "step_summary",
+    ]
+    return [column for column in preferred if column in replay.columns]
 
 
 def _paper_strategy(request: PaperTradingRequest):
@@ -164,6 +238,150 @@ def _paper_strategy(request: PaperTradingRequest):
 def _timestamp_key(value) -> str:
     timestamp = pd.Timestamp(value)
     return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _clean_text(value) -> str:
+    if value is None:
+        return ""
+    if pd.isna(value):
+        return ""
+    return str(value)
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_pct(value: float) -> str:
+    return f"{value:.1%}"
+
+
+def _format_money(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def _decision_label(
+    *,
+    action: str,
+    order_text: str,
+    risk_event: str,
+    blocked_reason: str,
+    executed_target_weight: float,
+    current_weight: float,
+) -> str:
+    if risk_event:
+        return "Risk halt"
+    if blocked_reason:
+        return "Bloqueada por riesgo"
+    if action == "buy":
+        return "Compra ejecutada"
+    if action == "sell":
+        return "Venta ejecutada"
+    if action == "dry_run":
+        return "Orden dry-run"
+    if action == "rejected":
+        return "Orden rechazada"
+    if order_text:
+        return "Orden registrada"
+    if abs(executed_target_weight - current_weight) <= 0.01:
+        return "Mantener posicion"
+    if executed_target_weight > current_weight:
+        return "Sin compra material"
+    if executed_target_weight < current_weight:
+        return "Sin venta material"
+    return "Esperar"
+
+
+def _timing_explanation() -> str:
+    return (
+        "La orden de esta barra usa la senal pendiente calculada en la barra anterior. "
+        "La senal calculada con el cierre actual queda para la proxima barra, evitando lookahead."
+    )
+
+
+def _signal_explanation(executed_target_weight: float, next_target_weight: float) -> str:
+    return (
+        f"Target aplicado ahora: {_format_pct(executed_target_weight)}. "
+        f"Target que la estrategia deja para la proxima barra: {_format_pct(next_target_weight)}."
+    )
+
+
+def _risk_explanation(
+    *,
+    risk_event: str,
+    blocked_reason: str,
+    order_text: str,
+    executed_target_weight: float,
+    current_weight: float,
+) -> str:
+    if risk_event == "max_drawdown":
+        return "El risk manager activo corte por max drawdown y fuerza salida o bloqueo de nuevas entradas."
+    if risk_event:
+        return f"El risk manager reporto evento de riesgo: {risk_event}."
+    if blocked_reason == "trade_limit":
+        return "El risk manager bloqueo la orden por limite de trades permitidos para el dia."
+    if blocked_reason:
+        return f"El risk manager bloqueo la orden: {blocked_reason}."
+    if order_text:
+        return "El risk manager permitio enviar una orden para acercar la posicion al target pendiente."
+    if abs(executed_target_weight - current_weight) <= 0.01:
+        return "No se envio orden porque la posicion ya estaba cerca del target pendiente."
+    return (
+        "No se envio orden. La diferencia contra el target probablemente fue menor al minimo operativo "
+        "o no genero cantidad ejecutable."
+    )
+
+
+def _broker_explanation(*, action: str, order_text: str, event_text: str, fill_text: str) -> str:
+    if fill_text:
+        return f"FakeBroker lleno la orden simulada: {fill_text}."
+    if action == "dry_run":
+        return "FakeBroker recibio la orden, pero dry-run la cancelo intencionalmente sin fill."
+    if action == "rejected":
+        return f"FakeBroker rechazo la orden simulada. Evento: {event_text or 'sin detalle registrado'}."
+    if order_text:
+        return f"Hubo orden registrada sin fill final visible. Evento: {event_text or 'sin detalle registrado'}."
+    return "FakeBroker no recibio orden en esta barra."
+
+
+def _account_explanation(
+    *,
+    equity: float,
+    cash: float,
+    current_weight: float,
+    position_quantity: float,
+    drawdown: float,
+) -> str:
+    exposure = "con exposicion" if current_weight > 0.01 else "en cash o casi sin exposicion"
+    return (
+        f"Equity {_format_money(equity)}, cash {_format_money(cash)}, "
+        f"posicion {position_quantity:.6g}, peso actual {_format_pct(current_weight)}; "
+        f"la cuenta queda {exposure}. Drawdown actual {_format_pct(drawdown)}."
+    )
+
+
+def _step_summary(
+    decision: str,
+    action: str,
+    risk_event: str,
+    blocked_reason: str,
+    fill_text: str,
+) -> str:
+    if risk_event or blocked_reason:
+        reason = risk_event or blocked_reason
+        return f"{decision}: la regla de riesgo domina la decision ({reason})."
+    if fill_text:
+        return f"{decision}: hubo fill simulado y la cuenta se actualizo."
+    if action == "dry_run":
+        return "Orden dry-run: se audito la orden, pero no impacto cash, posicion ni equity."
+    if action == "rejected":
+        return "Orden rechazada: no hubo cambio de posicion."
+    return f"{decision}: no hubo ejecucion nueva en esta barra."
 
 
 def _events_by_timestamp(events: pd.DataFrame) -> dict[str, str]:

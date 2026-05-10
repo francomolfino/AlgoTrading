@@ -5,6 +5,7 @@ import streamlit as st
 from algotrading.ui.adapters.paper_adapter import (
     PaperTradingRequest,
     build_paper_replay_frame,
+    replay_display_columns,
     replay_snapshot,
     run_paper_trading_request,
     supported_paper_strategies,
@@ -99,13 +100,24 @@ def render_paper_trading_simulator() -> None:
             c2.metric("Equity", f"{float(snapshot.get('equity', 0.0)):,.2f}")
             c3.metric("Cash", f"{float(snapshot.get('cash', 0.0)):,.2f}")
             c4.metric("Posicion", f"{float(snapshot.get('position_quantity', 0.0)):,.6g}")
-            st.write(f"Senal/peso proximo: `{snapshot.get('next_target_weight', 'n/a')}`")
-            st.write(f"Orden: `{snapshot.get('order') or 'sin orden'}`")
-            st.write(f"Evento broker: `{snapshot.get('order_status') or 'sin evento'}`")
-            st.write(f"Fill: `{snapshot.get('fill') or 'sin fill'}`")
+            st.subheader("Explicacion de la barra")
+            st.markdown(f"**Decision:** {snapshot.get('decision', 'sin decision')}")
+            st.caption(snapshot.get("timing_explanation", ""))
+            st.info(snapshot.get("signal_explanation", "Sin detalle de senal."))
+            c_signal, c_risk = st.columns(2)
+            c_signal.write(f"**Risk manager**  \n{snapshot.get('risk_explanation', 'Sin detalle de riesgo.')}")
+            c_risk.write(f"**Broker fake**  \n{snapshot.get('broker_explanation', 'Sin detalle de broker.')}")
+            st.write(f"**Cuenta:** {snapshot.get('account_explanation', 'Sin detalle de cuenta.')}")
+            st.write(f"**Resumen:** {snapshot.get('step_summary', 'Sin resumen.')}")
+            with st.expander("Detalle tecnico de la barra"):
+                st.write(f"Senal/peso aplicado: `{snapshot.get('executed_target_weight', 'n/a')}`")
+                st.write(f"Senal/peso proximo: `{snapshot.get('next_target_weight', 'n/a')}`")
+                st.write(f"Orden: `{snapshot.get('order') or 'sin orden'}`")
+                st.write(f"Evento broker: `{snapshot.get('order_status') or 'sin evento'}`")
+                st.write(f"Fill: `{snapshot.get('fill') or 'sin fill'}`")
             if snapshot.get("risk_event") or snapshot.get("blocked_reason"):
                 st.warning(f"Riesgo: {snapshot.get('risk_event') or snapshot.get('blocked_reason')}")
-            st.dataframe(replay, width="stretch", hide_index=True)
+            st.dataframe(replay[replay_display_columns(replay)], width="stretch", hide_index=True)
     tabs[1].dataframe(result.orders, width="stretch", hide_index=True)
     tabs[2].dataframe(result.order_events, width="stretch", hide_index=True)
     tabs[3].dataframe(result.fills, width="stretch", hide_index=True)
