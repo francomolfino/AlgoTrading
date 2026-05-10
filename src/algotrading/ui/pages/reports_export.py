@@ -9,15 +9,30 @@ from algotrading.ui.adapters.reports_adapter import (
     collect_experiment_report_files,
     generate_professional_research_report,
 )
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.selectors import experiment_selector as _experiment_selector
+from algotrading.ui.texts import EMPTY_STATES
 
 
 def render_reports_export() -> None:
-    st.title("Reports / Export")
+    _render_page_header(
+        "Reports / Export",
+        "Genera y descarga artefactos de research reproducibles.",
+        area="Research",
+    )
     record = _experiment_selector("reports_experiment")
     if record is None:
-        st.info("No hay experimentos guardados.")
+        empty = EMPTY_STATES["no_experiments"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters="Sin experimento no hay configuracion, metricas, curvas ni journal para exportar.",
+            next_step=empty["next"],
+        )
         return
     st.write(f"Carpeta: `{record.path}`")
     html_path = Path(record.path) / "research_report.html"

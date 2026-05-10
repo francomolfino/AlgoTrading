@@ -11,20 +11,34 @@ from algotrading.ui.adapters.paper_adapter import (
     supported_paper_strategies,
 )
 from algotrading.ui.adapters.strategy_adapter import get_strategy_config
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.result_views import render_equity_and_drawdown as _render_equity_and_drawdown
 from algotrading.ui.components.risk_controls import render_risk_settings as _render_risk_settings
 from algotrading.ui.components.selectors import asset_selector as _asset_selector
 from algotrading.ui.components.strategy_controls import render_strategy_parameters as _render_strategy_parameters
-from algotrading.ui.texts import PAPER_SIMULATION_WARNING
+from algotrading.ui.texts import EMPTY_STATES, PAPER_SIMULATION_WARNING
 
 
 def render_paper_trading_simulator() -> None:
-    st.title("Paper Trading Simulator")
-    st.error(PAPER_SIMULATION_WARNING)
+    _render_page_header(
+        "Paper Trading Simulator",
+        "Runtime simulado para auditar senales, ordenes, fills y estado de cuenta.",
+        area="Paper Runtime",
+        warning=PAPER_SIMULATION_WARNING,
+    )
     asset = _asset_selector("paper_asset")
     if asset is None:
-        st.info("Primero carga datos.")
+        empty = EMPTY_STATES["no_data"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters="Paper trading simulado necesita barras historicas o mock data para avanzar paso a paso.",
+            next_step=empty["next"],
+        )
         return
     strategies = supported_paper_strategies()
     strategy_key = st.selectbox("Estrategia", list(strategies), format_func=lambda key: strategies[key])
@@ -75,6 +89,13 @@ def render_paper_trading_simulator() -> None:
             return
     result = st.session_state.get("latest_paper")
     if result is None:
+        empty = EMPTY_STATES["no_paper_session"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters=empty["why"],
+            next_step=empty["next"],
+        )
         return
     cols = st.columns(5)
     cols[0].metric("Equity final", f"{result.summary['final_equity']:,.2f}")

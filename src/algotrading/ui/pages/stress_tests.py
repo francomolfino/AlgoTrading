@@ -11,7 +11,11 @@ from algotrading.ui.adapters.research_adapter import (
 )
 from algotrading.ui.adapters.stress_adapter import StressTestRequest, run_stress_test_request
 from algotrading.ui.adapters.strategy_adapter import STRATEGIES
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.experiment_config import (
     experiment_request_defaults as _experiment_request_defaults,
     render_experiment_config_summary as _render_experiment_config_summary,
@@ -23,13 +27,16 @@ from algotrading.ui.components.strategy_controls import (
     render_strategy_parameters as _render_strategy_parameters,
     render_strategy_research_metadata as _render_strategy_research_metadata,
 )
-from algotrading.ui.texts import TOOLTIPS
+from algotrading.ui.texts import EMPTY_STATES, TOOLTIPS
 
 
 def render_stress_tests() -> None:
-    st.title("Stress Tests")
-    st.caption("Pruebas adversas para ver si un resultado depende de supuestos optimistas o pocos eventos.")
-    st.warning("Stress testing sigue siendo research. No valida rentabilidad futura ni habilita trading real.")
+    _render_page_header(
+        "Stress Tests",
+        "Pruebas adversas para ver si un resultado depende de supuestos optimistas o pocos eventos.",
+        area="Research",
+        warning="Stress testing sigue siendo research. No valida rentabilidad futura ni habilita trading real.",
+    )
 
     records = list_experiments(st.session_state.experiments_dir)
     source = st.radio(
@@ -53,7 +60,13 @@ def render_stress_tests() -> None:
     if source == "Desde experimento guardado":
         selected_record = _experiment_selector("stress_source_experiment")
         if selected_record is None:
-            st.info("Primero corre y guarda un backtest. Luego podes aplicar stress tests sobre ese experimento.")
+            empty = EMPTY_STATES["no_experiments"]
+            _render_empty_state(
+                empty["title"],
+                missing=empty["missing"],
+                why_it_matters=empty["why"],
+                next_step="Guarda un backtest y volve a Stress Tests para aplicar escenarios adversos al experimento.",
+            )
             return
         details = load_experiment_details(selected_record.path)
         defaults = _experiment_request_defaults(details)
@@ -79,7 +92,13 @@ def render_stress_tests() -> None:
     else:
         asset = _asset_selector("stress_asset")
         if asset is None:
-            st.info("Primero carga datos en Data Manager.")
+            empty = EMPTY_STATES["no_data"]
+            _render_empty_state(
+                empty["title"],
+                missing=empty["missing"],
+                why_it_matters=empty["why"],
+                next_step=empty["next"],
+            )
             return
         symbol = asset.symbol_hint
         interval = asset.interval
@@ -162,7 +181,12 @@ def render_stress_tests() -> None:
 
     result = st.session_state.get("latest_stress_test")
     if result is None:
-        st.info("Configura una estrategia y corre el primer stress test.")
+        _render_empty_state(
+            "Sin stress test corrido",
+            missing="No hay resultado de stress en esta sesion.",
+            why_it_matters="Sin stress no sabemos si el backtest depende de costos bajos, delay ideal o pocos eventos.",
+            next_step="Selecciona un experimento guardado y ejecuta los escenarios adversos.",
+        )
         return
     linked_experiment = st.session_state.get("latest_stress_experiment")
     if linked_experiment:

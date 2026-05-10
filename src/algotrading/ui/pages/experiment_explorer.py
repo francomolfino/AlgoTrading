@@ -29,19 +29,34 @@ from algotrading.ui.adapters.research_adapter import (
     research_records_frame_from_paths,
 )
 from algotrading.ui.charts import render_line_comparison_chart
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.equity_comparison import (
     combined_equity_frame as _combined_equity_frame,
     comparison_has_mismatch as _comparison_has_mismatch,
 )
 from algotrading.ui.components.navigation import go_to_page as _go_to_page
+from algotrading.ui.texts import EMPTY_STATES
 
 
 def render_experiment_explorer() -> None:
-    st.title("Experiment Explorer")
+    _render_page_header(
+        "Experiment Explorer",
+        "Explora, filtra y compara experimentos guardados sin perder contexto metodologico.",
+        area="Research",
+    )
     records = list_experiments(st.session_state.experiments_dir)
     if not records:
-        st.info("Todavia no hay experimentos guardados.")
+        empty = EMPTY_STATES["no_experiments"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters=empty["why"],
+            next_step=empty["next"],
+        )
         return
 
     f1, f2, f3, f4 = st.columns(4)

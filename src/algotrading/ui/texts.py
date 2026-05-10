@@ -24,6 +24,13 @@ TOOLTIPS = {
     "overfitting": "Ajustar demasiado al pasado hasta capturar ruido en vez de una idea robusta.",
     "robustness": "Capacidad de mantener resultados razonables en activos, parametros y periodos distintos.",
     "sensitivity": "Cuanto cambian los resultados al mover parametros cercanos.",
+    "evidence_score": "Score de calidad de evidencia, no de rentabilidad. Penaliza poca muestra, falta de robustez y supuestos fragiles.",
+    "research_verdict": "Diagnostico critico del resultado. Resume flags metodologicos antes de mirar curvas.",
+    "data_quality_score": "Score heuristico de calidad de datos. Ayuda a detectar nulos, duplicados, gaps y OHLC raro.",
+    "stress_test": "Escenarios adversos para ver si el resultado depende de costos optimistas, delay o pocos eventos.",
+    "paper_trading": "Simulacion local con broker fake. No envia ordenes reales ni conecta dinero.",
+    "live_market_data": "Datos de mercado en vivo. Esta app todavia no los usa para operar.",
+    "simulated_broker": "Broker fake que simula lifecycle, fills y errores sin conectarse a un broker real.",
 }
 
 
@@ -40,12 +47,42 @@ PAPER_SIMULATION_WARNING = (
 
 
 RESEARCH_FLOW_STEPS = [
-    "Validar datos antes de mirar senales.",
-    "Revisar senales antes de correr backtest.",
-    "Comparar siempre contra buy and hold o benchmark.",
-    "Leer drawdown, trades y periodo antes que retorno total.",
-    "Validar robustez fuera de muestra antes de creer un resultado.",
+    "1. Cargar y validar datos.",
+    "2. Crear experimento con hipotesis clara.",
+    "3. Ejecutar backtest con costos realistas.",
+    "4. Revisar diagnostico, benchmark, drawdown y trades.",
+    "5. Correr robustez y stress antes de confiar.",
+    "6. Documentar conclusion en el journal.",
+    "7. Recién despues considerar paper trading simulado.",
 ]
+
+
+EMPTY_STATES = {
+    "no_data": {
+        "title": "No hay datos locales",
+        "missing": "Faltan archivos OHLCV en la carpeta de datos seleccionada.",
+        "why": "Sin datos no se pueden generar senales, backtests ni validaciones.",
+        "next": "Anda a Data Manager y descarga o carga un activo como SPY, QQQ o BTC-USD.",
+    },
+    "no_experiments": {
+        "title": "No hay experimentos guardados",
+        "missing": "Todavia no existe ningun backtest persistido en la carpeta de experimentos.",
+        "why": "Results Dashboard, Robustness, Stress y Journal necesitan un experimento para integrarse.",
+        "next": "Usa Nuevo experimento guiado o Backtest Runner y guarda el resultado.",
+    },
+    "no_latest_backtest": {
+        "title": "No hay backtest en esta sesion",
+        "missing": "No se ejecuto un backtest desde que abriste la app.",
+        "why": "El ultimo backtest vive en memoria; para analisis serio conviene abrir un experimento guardado.",
+        "next": "Corre un backtest o cambia la fuente a Experimento guardado.",
+    },
+    "no_paper_session": {
+        "title": "No hay sesion paper simulada",
+        "missing": "Todavia no ejecutaste una simulacion con FakeBroker.",
+        "why": "Sin una sesion no hay ordenes, fills, posiciones ni replay para auditar.",
+        "next": "Selecciona datos, estrategia y capital simulado, luego ejecuta la simulacion.",
+    },
+}
 
 
 METRIC_EXPLANATIONS = {

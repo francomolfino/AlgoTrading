@@ -4,18 +4,23 @@ import streamlit as st
 
 from algotrading.ui.adapters.data_adapter import list_data_assets
 from algotrading.ui.adapters.experiment_adapter import list_experiments, records_frame
-from algotrading.ui.components.common import render_bullets as _render_bullets
+from algotrading.ui.components.common import (
+    render_bullets as _render_bullets,
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+)
 from algotrading.ui.components.home_overview import render_next_step as _render_next_step
 from algotrading.ui.components.navigation import nav_button as _nav_button
-from algotrading.ui.texts import EDUCATIONAL_WARNING, RESEARCH_FLOW_STEPS
+from algotrading.ui.texts import EDUCATIONAL_WARNING, EMPTY_STATES, RESEARCH_FLOW_STEPS
 
 
 def render_home() -> None:
-    st.title("AlgoTrading Lab")
-    st.warning(EDUCATIONAL_WARNING)
-    st.write(
+    _render_page_header(
+        "AlgoTrading Lab",
         "Interfaz local para investigar estrategias simples, validar datos, correr backtests "
-        "y revisar resultados con una lectura critica."
+        "y revisar resultados con una lectura critica.",
+        area="Research",
+        warning=EDUCATIONAL_WARNING,
     )
 
     data_assets = list_data_assets(st.session_state.data_dir, st.session_state.interval)
@@ -43,4 +48,10 @@ def render_home() -> None:
     if experiments:
         st.dataframe(records_frame(experiments[:5]), width="stretch", hide_index=True)
     else:
-        st.info("Todavia no hay experimentos guardados.")
+        empty = EMPTY_STATES["no_experiments"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters=empty["why"],
+            next_step=empty["next"],
+        )

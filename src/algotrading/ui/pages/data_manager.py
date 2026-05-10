@@ -16,15 +16,22 @@ from algotrading.ui.adapters.data_quality_adapter import (
     build_advanced_data_quality_report,
 )
 from algotrading.ui.charts import render_price_volume_chart
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.data_quality import render_data_quality_reading as _render_data_quality_reading
 from algotrading.ui.components.selectors import asset_selector as _asset_selector
-from algotrading.ui.texts import TOOLTIPS
+from algotrading.ui.texts import EMPTY_STATES, TOOLTIPS
 
 
 def render_data_manager() -> None:
-    st.title("Data Manager")
-    st.caption("Descarga, recarga y valida datos historicos locales.")
+    _render_page_header(
+        "Data Manager",
+        "Descarga, recarga y valida datos historicos locales antes de mirar estrategias.",
+        area="Research",
+    )
     download_tab, explore_tab = st.tabs(["Descargar datos", "Explorar datos"])
 
     with download_tab:
@@ -61,7 +68,13 @@ def render_data_manager() -> None:
     with explore_tab:
         asset = _asset_selector("data_manager_asset")
         if asset is None:
-            st.info("No encontre datos locales. Descarga un activo primero.")
+            empty = EMPTY_STATES["no_data"]
+            _render_empty_state(
+                empty["title"],
+                missing=empty["missing"],
+                why_it_matters=empty["why"],
+                next_step=empty["next"],
+            )
             return
         try:
             frame = load_data_file(asset.path)

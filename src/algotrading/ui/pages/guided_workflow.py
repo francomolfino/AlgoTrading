@@ -40,7 +40,11 @@ from algotrading.ui.adapters.strategy_adapter import (
     validate_strategy_parameters,
 )
 from algotrading.ui.charts import render_price_volume_chart
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.data_quality import render_data_quality_reading as _render_data_quality_reading
 from algotrading.ui.components.guided_state import get_guided_draft as _get_guided_draft, set_guided_draft as _set_guided_draft
 from algotrading.ui.components.navigation import go_to_page as _go_to_page
@@ -59,12 +63,16 @@ from algotrading.ui.components.strategy_controls import (
     render_strategy_research_metadata as _render_strategy_research_metadata,
 )
 from algotrading.ui.texts import TOOLTIPS
+from algotrading.ui.texts import EMPTY_STATES
 
 
 def render_guided_workflow() -> None:
-    st.title("Nuevo experimento guiado")
-    st.warning("Modo research educativo. No opera dinero real ni valida rentabilidad futura.")
-    st.write("Este flujo te lleva de datos a conclusion sin saltarte controles basicos.")
+    _render_page_header(
+        "Nuevo experimento guiado",
+        "Este flujo te lleva de datos a conclusion sin saltarte controles basicos.",
+        area="Research",
+        warning="Modo research educativo. No opera dinero real ni valida rentabilidad futura.",
+    )
 
     draft = _get_guided_draft()
     preset_options = preset_keys()
@@ -120,7 +128,13 @@ def _render_guided_data_step(draft: ExperimentDraft) -> None:
     st.subheader("1. Seleccionar/validar datos")
     assets = list_data_assets(st.session_state.data_dir, st.session_state.interval)
     if not assets:
-        st.info("No encontre datos locales para el timeframe actual. Descarga datos antes de crear el experimento.")
+        empty = EMPTY_STATES["no_data"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters=empty["why"],
+            next_step=empty["next"],
+        )
         if st.button("Ir a Data Manager"):
             _go_to_page("Data Manager")
         return

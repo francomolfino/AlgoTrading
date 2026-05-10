@@ -10,7 +10,12 @@ from algotrading.ui.adapters.backtest_adapter import (
 )
 from algotrading.ui.adapters.preset_adapter import get_research_preset, preset_keys, preset_label
 from algotrading.ui.adapters.strategy_adapter import STRATEGIES, get_strategy_config
-from algotrading.ui.components.common import render_bullets as _render_bullets, show_error as _show_error
+from algotrading.ui.components.common import (
+    render_bullets as _render_bullets,
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.preflight import render_backtest_preflight as _render_backtest_preflight
 from algotrading.ui.components.research_presets import render_preset_summary as _render_preset_summary
 from algotrading.ui.components.research_results import render_backtest_result as _render_backtest_result
@@ -20,12 +25,16 @@ from algotrading.ui.components.strategy_controls import (
     render_strategy_parameters as _render_strategy_parameters,
     render_strategy_research_metadata as _render_strategy_research_metadata,
 )
-from algotrading.ui.texts import TOOLTIPS
+from algotrading.ui.texts import EMPTY_STATES, TOOLTIPS
 
 
 def render_backtest_runner() -> None:
-    st.title("Backtest Runner")
-    st.warning("Backtest educativo. No modela liquidez real, impuestos ni ejecucion parcial.")
+    _render_page_header(
+        "Backtest Runner",
+        "Ejecuta un backtest reproducible con costos, benchmark y controles de riesgo.",
+        area="Research",
+        warning="Backtest educativo. No modela liquidez real, impuestos ni ejecucion parcial.",
+    )
     with st.expander("Checklist antes de correr", expanded=False):
         _render_bullets(
             [
@@ -38,7 +47,13 @@ def render_backtest_runner() -> None:
         )
     asset = _asset_selector("backtest_asset")
     if asset is None:
-        st.info("Primero carga datos en Data Manager.")
+        empty = EMPTY_STATES["no_data"]
+        _render_empty_state(
+            empty["title"],
+            missing=empty["missing"],
+            why_it_matters=empty["why"],
+            next_step=empty["next"],
+        )
         return
 
     st.subheader("Preset de research")

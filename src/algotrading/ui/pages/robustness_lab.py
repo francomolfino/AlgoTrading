@@ -16,7 +16,11 @@ from algotrading.ui.adapters.robustness_adapter import (
     run_robustness_request,
 )
 from algotrading.ui.adapters.strategy_adapter import STRATEGIES
-from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.common import (
+    render_empty_state as _render_empty_state,
+    render_page_header as _render_page_header,
+    show_error as _show_error,
+)
 from algotrading.ui.components.experiment_config import (
     experiment_request_defaults as _experiment_request_defaults,
     render_experiment_config_summary as _render_experiment_config_summary,
@@ -27,12 +31,15 @@ from algotrading.ui.components.strategy_controls import (
     render_strategy_parameters as _render_strategy_parameters,
     render_strategy_research_metadata as _render_strategy_research_metadata,
 )
-from algotrading.ui.texts import TOOLTIPS
+from algotrading.ui.texts import EMPTY_STATES, TOOLTIPS
 
 
 def render_robustness_lab() -> None:
-    st.title("Robustness Lab")
-    st.caption("Train/test, walk-forward y diagnostico critico contra buy and hold.")
+    _render_page_header(
+        "Robustness Lab",
+        "Train/test, walk-forward y diagnostico critico contra buy and hold.",
+        area="Research",
+    )
     st.info("Robustez no busca el mejor numero: busca detectar fragilidad, dependencia de periodo y posible overfitting.")
 
     records = list_experiments(st.session_state.experiments_dir)
@@ -56,7 +63,13 @@ def render_robustness_lab() -> None:
     if source == "Desde experimento guardado":
         selected_record = _experiment_selector("robustness_source_experiment")
         if selected_record is None:
-            st.info("Primero corre y guarda un backtest. Luego podes validar ese experimento aca.")
+            empty = EMPTY_STATES["no_experiments"]
+            _render_empty_state(
+                empty["title"],
+                missing=empty["missing"],
+                why_it_matters=empty["why"],
+                next_step="Guarda un backtest y volve a Robustness Lab para asociar la validacion al experimento.",
+            )
             return
         details = load_experiment_details(selected_record.path)
         defaults = _experiment_request_defaults(details)
@@ -89,7 +102,13 @@ def render_robustness_lab() -> None:
     else:
         assets = list_data_assets(data_dir, interval)
         if len(assets) < 1:
-            st.info("Primero carga datos en Data Manager.")
+            empty = EMPTY_STATES["no_data"]
+            _render_empty_state(
+                empty["title"],
+                missing=empty["missing"],
+                why_it_matters=empty["why"],
+                next_step=empty["next"],
+            )
             return
         selected_assets = st.multiselect(
             "Activos",

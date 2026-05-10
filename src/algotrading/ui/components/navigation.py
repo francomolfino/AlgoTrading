@@ -22,6 +22,30 @@ PAGES = [
     "Settings",
 ]
 
+PAGE_AREAS = {
+    "Home / Overview": "Research",
+    "Nuevo experimento guiado": "Research",
+    "Data Manager": "Research",
+    "Strategy Lab": "Research",
+    "Backtest Runner": "Research",
+    "Results Dashboard": "Research",
+    "Experiment Explorer": "Research",
+    "Robustness Lab": "Research",
+    "Stress Tests": "Research",
+    "Portfolio Lab": "Portfolio / Risk",
+    "Risk Manager": "Portfolio / Risk",
+    "Paper Trading Simulator": "Paper Runtime",
+    "Reports / Export": "Research",
+    "Settings": "Sistema",
+}
+
+AREA_DESCRIPTIONS = {
+    "Research": "Datos, experimentos, resultados, robustez y reportes.",
+    "Portfolio / Risk": "Carteras y controles de riesgo para simulacion.",
+    "Paper Runtime": "Simulacion local con broker fake, sin dinero real.",
+    "Sistema": "Preferencias locales de la app.",
+}
+
 
 def init_state() -> None:
     settings = load_ui_settings()
@@ -44,6 +68,9 @@ def render_sidebar() -> None:
     with st.sidebar:
         st.header("Navegacion")
         current = st.session_state.page if st.session_state.page in PAGES else PAGES[0]
+        area = page_area(current)
+        st.caption(f"Area actual: {area}")
+        st.caption(AREA_DESCRIPTIONS.get(area, ""))
         if st.session_state.get("nav_page") not in PAGES or st.session_state.nav_page != current:
             st.session_state.nav_page = current
         st.radio(
@@ -53,6 +80,13 @@ def render_sidebar() -> None:
             label_visibility="collapsed",
             on_change=_sync_page_from_sidebar,
         )
+        st.divider()
+        with st.expander("Mapa conceptual", expanded=False):
+            for group in ("Research", "Portfolio / Risk", "Paper Runtime", "Sistema"):
+                st.markdown(f"**{group}**")
+                for page in [item for item in PAGES if page_area(item) == group]:
+                    marker = ">" if page == current else "-"
+                    st.caption(f"{marker} {page}")
         st.divider()
         st.header("Configuracion")
         st.session_state.data_dir = st.text_input("Carpeta datos", value=st.session_state.data_dir)
@@ -79,6 +113,10 @@ def go_to_page(page: str) -> None:
     st.session_state.page = page
     st.session_state.pending_nav_page = page
     st.rerun()
+
+
+def page_area(page: str) -> str:
+    return PAGE_AREAS.get(page, "Research")
 
 
 def _sync_page_from_sidebar() -> None:
