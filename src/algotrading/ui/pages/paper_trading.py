@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+import streamlit as st
+
+from algotrading.ui.adapters.paper_adapter import (
+    PaperTradingRequest,
+    run_paper_trading_request,
+    supported_paper_strategies,
+)
+from algotrading.ui.adapters.strategy_adapter import get_strategy_config
+from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.result_views import render_equity_and_drawdown as _render_equity_and_drawdown
+from algotrading.ui.components.risk_controls import render_risk_settings as _render_risk_settings
+from algotrading.ui.components.selectors import asset_selector as _asset_selector
+from algotrading.ui.components.strategy_controls import render_strategy_parameters as _render_strategy_parameters
+from algotrading.ui.texts import PAPER_SIMULATION_WARNING
 
 
 def render_paper_trading_simulator() -> None:

@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+import streamlit as st
+
+from algotrading.ui.adapters.data_adapter import list_data_assets
+from algotrading.ui.adapters.portfolio_adapter import (
+    PortfolioRequest,
+    preflight_portfolio_request,
+    run_portfolio_request,
+)
+from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.preflight import render_portfolio_preflight as _render_portfolio_preflight
+from algotrading.ui.components.result_views import render_equity_and_drawdown as _render_equity_and_drawdown
+from algotrading.ui.texts import TOOLTIPS
 
 
 def render_portfolio_lab() -> None:

@@ -103,6 +103,21 @@ from algotrading.ui.adapters.evidence_adapter import (
     components_frame,
 )
 from algotrading.ui.adapters.verdict_adapter import build_research_verdict_from_result
+from algotrading.ui.components import guided_state
+from algotrading.ui.components.equity_comparison import combined_equity_frame, comparison_has_mismatch
+from algotrading.ui.components.experiment_config import experiment_request_defaults
+from algotrading.ui.components.signal_insights import price_overlay_columns
+
+
+class _SessionState(dict):
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError as exc:
+            raise AttributeError(key) from exc
+
+    def __setattr__(self, key, value):
+        self[key] = value
 
 
 def _frame(prices):
@@ -811,6 +826,97 @@ def test_research_page_is_compatibility_layer_only():
     assert "def render_" not in source
     assert "Compatibility layer" in source
     assert callable(research.render_results_dashboard)
+
+
+def test_shared_page_module_is_compatibility_layer_only():
+    source = Path("src/algotrading/ui/pages/_shared.py").read_text(encoding="utf-8")
+
+    assert "Compatibility layer" in source
+    assert "def _" not in source
+    assert "from algotrading.ui.components" in source
+
+
+def test_ui_component_equity_comparison_helpers():
+    curves = {
+        "base": pd.DataFrame({"date": ["2024-01-01", "2024-01-02"], "equity": [100, 105]}),
+        "stress": pd.DataFrame({"date": ["2024-01-01", "2024-01-02"], "equity": [100, 95]}),
+    }
+    combined = combined_equity_frame(curves)
+
+    assert combined.index.is_monotonic_increasing
+    assert combined["base"].tolist() == [100, 105]
+    assert combined["stress"].tolist() == [100, 95]
+    assert comparison_has_mismatch(
+        pd.DataFrame(
+            [
+                {"symbol": "SPY", "start_date": "2020-01-01", "end_date": "2021-01-01"},
+                {"symbol": "QQQ", "start_date": "2020-01-01", "end_date": "2021-01-01"},
+            ]
+        )
+    )
+    assert comparison_has_mismatch(pd.DataFrame()) is False
+
+
+def test_ui_component_experiment_request_defaults_from_saved_experiment():
+    root = _workspace_tmp("ui_component_defaults")
+    data_dir = root / "data"
+    experiments_dir = root / "experiments"
+    save_ohlcv(_frame(list(range(100, 380))), data_dir / "SPY_1D.csv")
+    run_backtest_request(
+        BacktestRequest(
+            symbol="SPY",
+            strategy_key="sma_cross",
+            strategy_parameters={"fast_window": 3, "slow_window": 5},
+            data_dir=data_dir,
+            interval="1d",
+            start="2024-01-05",
+            end="2024-06-30",
+            price_column="close",
+            initial_capital=12_345,
+            commission_bps=4,
+            slippage_bps=7,
+            risk=RiskSettings(position_fraction=0.5),
+            experiment_name="component_defaults",
+            experiments_root=experiments_dir,
+        )
+    )
+    details = load_experiment_details(list_experiments(experiments_dir)[0].path)
+    defaults = experiment_request_defaults(details)
+
+    assert defaults["symbol"] == "SPY"
+    assert defaults["symbols"] == ("SPY",)
+    assert defaults["strategy_key"] == "sma_cross"
+    assert defaults["strategy_parameters"] == {"fast_window": 3, "slow_window": 5}
+    assert defaults["price_column"] == "close"
+    assert defaults["initial_capital"] == 12_345
+    assert defaults["commission_bps"] == 4
+    assert defaults["slippage_bps"] == 7
+
+
+def test_ui_component_signal_overlay_columns_are_numeric_and_limited():
+    frame = pd.DataFrame(
+        {
+            "sma_fast": [1.0, 2.0],
+            "rolling_high_20": [3.0, 4.0],
+            "rolling_low_text": ["x", "y"],
+            "other": [5.0, 6.0],
+        }
+    )
+
+    assert price_overlay_columns(frame) == ("sma_fast", "rolling_high_20")
+
+
+def test_ui_component_guided_state_uses_session_like_object(monkeypatch):
+    session = _SessionState(interval="1wk")
+    monkeypatch.setattr(guided_state.st, "session_state", session)
+
+    draft = guided_state.get_guided_draft()
+    updated = update_experiment_draft(draft, step=4)
+    guided_state.set_guided_draft(updated)
+
+    assert draft.interval == "1wk"
+    assert session.experiment_draft.step == 4
+    assert session.pending_guided_step == 4
 
 
 def test_ui_backtest_preflight_blocks_short_period():

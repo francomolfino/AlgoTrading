@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+import streamlit as st
+
+from algotrading.ui.adapters.data_adapter import list_data_assets
+from algotrading.ui.adapters.experiment_adapter import list_experiments, records_frame
+from algotrading.ui.components.common import render_bullets as _render_bullets
+from algotrading.ui.components.home_overview import render_next_step as _render_next_step
+from algotrading.ui.components.navigation import nav_button as _nav_button
+from algotrading.ui.texts import EDUCATIONAL_WARNING, RESEARCH_FLOW_STEPS
 
 
 def render_home() -> None:

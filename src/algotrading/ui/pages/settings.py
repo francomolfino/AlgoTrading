@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+import streamlit as st
+
+from algotrading.ui.adapters.settings_adapter import UISettings, save_ui_settings
+from algotrading.ui.components.common import show_error as _show_error
 
 
 def render_settings() -> None:

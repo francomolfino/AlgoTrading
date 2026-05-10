@@ -1,6 +1,24 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+import pandas as pd
+import streamlit as st
+
+from algotrading.ui.adapters.backtest_adapter import (
+    BacktestRequest,
+    preflight_backtest_request,
+    run_backtest_request,
+)
+from algotrading.ui.adapters.strategy_adapter import STRATEGIES, get_strategy_config
+from algotrading.ui.components.common import render_bullets as _render_bullets, show_error as _show_error
+from algotrading.ui.components.preflight import render_backtest_preflight as _render_backtest_preflight
+from algotrading.ui.components.research_results import render_backtest_result as _render_backtest_result
+from algotrading.ui.components.risk_controls import render_risk_settings as _render_risk_settings
+from algotrading.ui.components.selectors import asset_selector as _asset_selector
+from algotrading.ui.components.strategy_controls import (
+    render_strategy_parameters as _render_strategy_parameters,
+    render_strategy_research_metadata as _render_strategy_research_metadata,
+)
+from algotrading.ui.texts import TOOLTIPS
 
 
 def render_backtest_runner() -> None:

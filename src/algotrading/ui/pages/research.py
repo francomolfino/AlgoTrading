@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # Compatibility layer: page implementations now live in dedicated modules.
-from algotrading.ui.pages._shared import *
 from algotrading.ui.pages.backtest_runner import render_backtest_runner
 from algotrading.ui.pages.data_manager import render_data_manager
 from algotrading.ui.pages.experiment_explorer import render_experiment_explorer

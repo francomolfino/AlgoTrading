@@ -1,6 +1,40 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+from algotrading.ui.adapters.experiment_adapter import (
+    ExperimentRecord,
+    compare_experiment_records,
+    delete_experiment_dir,
+    diff_experiment_configs,
+    filter_records,
+    list_experiments,
+    load_equity_curves,
+    sort_records,
+)
+from algotrading.ui.adapters.journal_adapter import (
+    RESEARCH_NOTE_STATUSES,
+    ResearchNotes,
+    load_research_notes,
+    parse_tags,
+    save_research_notes,
+    tags_to_text,
+)
+from algotrading.ui.adapters.research_adapter import (
+    compare_experiment_fairness,
+    research_records_cache_signature,
+    research_records_frame_from_paths,
+)
+from algotrading.ui.charts import render_line_comparison_chart
+from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.equity_comparison import (
+    combined_equity_frame as _combined_equity_frame,
+    comparison_has_mismatch as _comparison_has_mismatch,
+)
+from algotrading.ui.components.navigation import go_to_page as _go_to_page
 
 
 def render_experiment_explorer() -> None:
@@ -27,6 +61,7 @@ def render_experiment_explorer() -> None:
     filtered = sort_records(filtered, sort_by)
     frame = _cached_research_records_frame(research_records_cache_signature(filtered))
     display_frame = _explorer_display_frame(frame)
+    st.caption("Lectura rapida: usa los checks para ver si el experimento ya tiene robustez, stress y journal conectados.")
     st.dataframe(
         display_frame,
         width="stretch",
@@ -36,6 +71,8 @@ def render_experiment_explorer() -> None:
             "total_return": st.column_config.NumberColumn("Retorno", format="%.2%%"),
             "sharpe_ratio": st.column_config.NumberColumn("Sharpe", format="%.2f"),
             "max_drawdown": st.column_config.NumberColumn("Max DD", format="%.2%%"),
+            "checks": st.column_config.TextColumn("Checks research"),
+            "favorite_badge": st.column_config.TextColumn("Fav"),
         },
     )
     if not filtered:
@@ -48,7 +85,8 @@ def render_experiment_explorer() -> None:
         format_func=lambda record: f"{record.name} - {record.strategy} - {', '.join(record.symbols)}",
         key="experiment_quick_open",
     )
-    a1, a2, a3, a4 = st.columns(4)
+    _render_quick_research_badges(quick_record, frame)
+    a1, a2, a3, a4, a5 = st.columns(5)
     if a1.button("Resultados", width="stretch"):
         st.session_state.results_experiment = quick_record
         _go_to_page("Results Dashboard")
@@ -63,6 +101,9 @@ def render_experiment_explorer() -> None:
         st.session_state.journal_experiment_select = quick_record
         st.session_state.expand_research_journal = True
         st.rerun()
+    if a5.button("Reportes", width="stretch"):
+        st.session_state.reports_experiment = quick_record
+        _go_to_page("Reports / Export")
 
     _render_experiment_journal(filtered)
 
@@ -203,7 +244,71 @@ def _cached_research_records_frame(signature: tuple[tuple[str, float], ...]):
 
 def _explorer_display_frame(frame: pd.DataFrame) -> pd.DataFrame:
     display = frame.copy()
-    for column in ["has_robustness", "has_stress", "has_journal", "favorite"]:
-        if column in display:
-            display[column] = display[column].map(lambda value: "si" if bool(value) else "no")
+    if display.empty:
+        return display
+    display["checks"] = display.apply(_research_checks_label, axis=1)
+    if "favorite" in display:
+        display["favorite_badge"] = display["favorite"].map(lambda value: "favorito" if bool(value) else "")
+    else:
+        display["favorite_badge"] = ""
+    preferred = [
+        "name",
+        "pipeline_state",
+        "journal_status",
+        "evidence_score",
+        "checks",
+        "favorite_badge",
+        "tags",
+        "strategy",
+        "symbols",
+        "total_return",
+        "sharpe_ratio",
+        "max_drawdown",
+        "created_at",
+        "path",
+    ]
+    return display[[column for column in preferred if column in display]]
+
+
+def _render_quick_research_badges(record: ExperimentRecord, frame: pd.DataFrame) -> None:
+    row = _frame_row_for_record(record, frame)
+    if row is None:
+        st.info("No pude cargar el resumen de research para este experimento.")
+        return
+    st.subheader("Resumen rapido")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Pipeline", str(row.get("pipeline_state", "n/a")))
+    score = row.get("evidence_score")
+    c2.metric("Evidence", "n/a" if pd.isna(score) else f"{float(score):.0f}/100")
+    _status_badge(c3, "Robustez", bool(row.get("has_robustness")))
+    _status_badge(c4, "Stress", bool(row.get("has_stress")))
+    _status_badge(c5, "Journal", bool(row.get("has_journal")))
+    tags = str(row.get("tags", "") or "").strip()
+    if tags:
+        st.caption(f"Tags: {tags}")
+
+
+def _frame_row_for_record(record: ExperimentRecord, frame: pd.DataFrame):
+    if frame.empty or "path" not in frame:
+        return None
+    matches = frame[frame["path"].astype(str) == str(record.path)]
+    if matches.empty:
+        return None
+    return matches.iloc[0]
+
+
+def _status_badge(column, label: str, ok: bool) -> None:
+    with column:
+        st.caption(label)
+        if ok:
+            st.success("conectado")
+        else:
+            st.warning("pendiente")
+
+
+def _research_checks_label(row: pd.Series) -> str:
+    robustness = "R:ok" if bool(row.get("has_robustness")) else "R:pend"
+    stress = "S:ok" if bool(row.get("has_stress")) else "S:pend"
+    journal = "J:ok" if bool(row.get("has_journal")) else "J:pend"
+    return f"{robustness} | {stress} | {journal}"
     return display

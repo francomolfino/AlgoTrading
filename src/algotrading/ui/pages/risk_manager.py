@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from algotrading.ui.pages._shared import *
+import pandas as pd
+import streamlit as st
+
+from algotrading.ui.adapters.backtest_adapter import BacktestRequest, run_backtest_request
+from algotrading.ui.adapters.risk_adapter import RiskSettings
+from algotrading.ui.charts import render_line_comparison_chart
+from algotrading.ui.components.common import show_error as _show_error
+from algotrading.ui.components.equity_comparison import combined_equity_frame as _combined_equity_frame
+from algotrading.ui.components.risk_controls import render_risk_settings as _render_risk_settings
+from algotrading.ui.components.selectors import asset_selector as _asset_selector, strategy_selector as _strategy_selector
+from algotrading.ui.components.strategy_controls import render_strategy_parameters as _render_strategy_parameters
 
 
 def render_risk_manager_lab() -> None:

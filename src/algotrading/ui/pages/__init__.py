@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from algotrading.ui.components.navigation import PAGES
-from algotrading.ui.pages._shared import render_placeholder
+from algotrading.ui.components.common import render_placeholder
 from algotrading.ui.pages.backtest_runner import render_backtest_runner
 from algotrading.ui.pages.data_manager import render_data_manager
 from algotrading.ui.pages.experiment_explorer import render_experiment_explorer
