@@ -15,6 +15,7 @@ La app y el laboratorio fueron hechos 100% vibecodeando.
 - [Supuestos de backtesting](docs/BACKTESTING_ASSUMPTIONS.md)
 - [Limitaciones de paper trading](docs/PAPER_TRADING_LIMITATIONS.md)
 - [Calidad de datos](docs/DATA_QUALITY.md)
+- [Snapshots visuales de Streamlit](docs/UI_SNAPSHOTS.md)
 
 ## Etapa 1: datos históricos
 

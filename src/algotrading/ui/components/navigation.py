@@ -25,7 +25,11 @@ PAGES = [
 
 def init_state() -> None:
     settings = load_ui_settings()
-    st.session_state.setdefault("page", PAGES[0])
+    query_page = _page_from_query_params()
+    st.session_state.setdefault("page", query_page or PAGES[0])
+    if query_page and st.session_state.get("_query_page_applied") != query_page:
+        st.session_state.page = query_page
+        st.session_state._query_page_applied = query_page
     if st.session_state.page not in PAGES:
         st.session_state.page = PAGES[0]
     st.session_state.setdefault("nav_page", st.session_state.page)
@@ -87,3 +91,14 @@ def _apply_pending_navigation() -> None:
     if pending in PAGES:
         st.session_state.page = pending
         st.session_state.nav_page = pending
+
+
+def _page_from_query_params() -> str | None:
+    try:
+        raw_page = st.query_params.get("page")
+    except Exception:
+        return None
+    if isinstance(raw_page, list):
+        raw_page = raw_page[0] if raw_page else None
+    page = str(raw_page).strip() if raw_page is not None else ""
+    return page if page in PAGES else None

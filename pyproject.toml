@@ -26,6 +26,9 @@ ui = [
 calendars = [
     "pandas-market-calendars>=4.4",
 ]
+visual = [
+    "playwright>=1.45",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
