@@ -25,11 +25,7 @@ from algotrading.ui.adapters.preset_adapter import (
     list_research_presets,
     preset_frame,
 )
-from algotrading.ui.adapters.reports_adapter import (
-    collect_experiment_report_files,
-    generate_professional_research_pdf,
-    generate_professional_research_report,
-)
+from algotrading.ui.adapters.reports_adapter import generate_professional_research_report
 from algotrading.ui.adapters.research_adapter import build_research_summary
 
 
@@ -221,34 +217,6 @@ def test_professional_html_report_is_generated_for_experiment():
     assert "Ficha reproducible" in content
     assert "Archivos generados" in content
     assert "Data Quality" in content
-
-
-def test_professional_pdf_report_is_generated_for_experiment():
-    root = _workspace_tmp("professional_pdf")
-    data_dir = root / "data"
-    experiments_dir = root / "experiments"
-    save_ohlcv(_frame([100, 101, 102, 103, 104, 105, 106, 107]), data_dir / "SPY_1D.csv")
-    run_backtest_request(
-        BacktestRequest(
-            symbol="SPY",
-            strategy_key="sma_cross",
-            strategy_parameters={"fast_window": 3, "slow_window": 5},
-            data_dir=data_dir,
-            interval="1d",
-            commission_bps=1,
-            slippage_bps=2,
-            experiment_name="pdf_report_test",
-            experiments_root=experiments_dir,
-        )
-    )
-    record = list_experiments(experiments_dir)[0]
-
-    report_path = generate_professional_research_pdf(record.path)
-    files = collect_experiment_report_files(record.path)
-
-    assert report_path.name == "research_report.pdf"
-    assert report_path.read_bytes().startswith(b"%PDF-")
-    assert any(item.label == "research_report.pdf" and item.mime == "application/pdf" for item in files)
 
 
 def test_paper_replay_frame_handles_orders_and_empty_fills():

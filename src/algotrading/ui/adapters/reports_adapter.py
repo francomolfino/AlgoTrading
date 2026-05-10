@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from html import escape
 from io import BytesIO
 from pathlib import Path
-import textwrap
-import unicodedata
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
@@ -25,7 +23,6 @@ def collect_experiment_report_files(experiment_dir: Path | str) -> list[ReportFi
     files: list[ReportFile] = []
     for path in [
         root / "research_report.html",
-        root / "research_report.pdf",
         root / "config.json",
         root / "metadata.json",
         root / "experiment_metadata.json",
@@ -228,74 +225,6 @@ def generate_professional_research_report(experiment_dir: Path | str) -> Path:
     return report_path
 
 
-def generate_professional_research_pdf(experiment_dir: Path | str) -> Path:
-    """Genera un PDF simple y portable sin dependencias externas."""
-    summary = build_research_summary(experiment_dir)
-    details = summary.details
-    root = Path(experiment_dir)
-    report_path = root / "research_report.pdf"
-    data_quality = summary.data_quality
-    metrics = details.metrics if isinstance(details.metrics, dict) else {}
-    sections = [
-        (
-            "Resumen ejecutivo",
-            [
-                "No es recomendacion de inversion. Es un reporte educativo de research.",
-                f"Experimento: {details.path.name}",
-                f"Preset: {summary.research_preset.label}",
-                f"Research Verdict: {summary.verdict.reliability}",
-                f"Evidence Score: {summary.evidence_score.score:.0f}/100",
-                f"Pipeline: {summary.pipeline_state}",
-                f"Data Quality: {data_quality.score:.0f}/100 ({data_quality.severity})"
-                if data_quality
-                else "Data Quality: no disponible",
-                f"Proxima accion: {summary.recommended_next_action}",
-            ],
-        ),
-        (
-            "Hipotesis y conclusion",
-            [
-                f"Hipotesis: {summary.journal_hypothesis or 'no disponible'}",
-                f"Conclusion: {summary.journal_conclusion or 'no disponible'}",
-                f"Proximo test: {summary.journal_next_test or 'no disponible'}",
-            ],
-        ),
-        (
-            "Metricas principales",
-            [
-                f"Retorno total: {_format_pdf_metric(metrics.get('total_return'), percent=True)}",
-                f"CAGR: {_format_pdf_metric(metrics.get('cagr'), percent=True)}",
-                f"Sharpe aprox.: {_format_pdf_metric(metrics.get('sharpe_ratio'))}",
-                f"Max drawdown: {_format_pdf_metric(metrics.get('max_drawdown'), percent=True)}",
-                f"Trades: {_format_pdf_metric(metrics.get('number_of_trades'))}",
-                f"Benchmark: {summary.verdict.benchmark_status}",
-            ],
-        ),
-        (
-            "Robustez y stress",
-            [
-                "Robustez: " + (summary.robustness_summary.get("comment", "corrida") if summary.robustness_summary else "no corrida"),
-                "Stress: " + (summary.stress_summary.get("conclusion", "corrido") if summary.stress_summary else "no corrido"),
-            ],
-        ),
-        (
-            "Flags criticos",
-            list(summary.critical_flags or ("Sin flags criticos obvios.",)),
-        ),
-        (
-            "Limitaciones",
-            [
-                "No modela liquidez real, impuestos, spreads variables ni ejecucion parcial.",
-                "Los datos dependen de la fuente historica local disponible.",
-                "Pocos trades o periodos cortos vuelven fragiles las conclusiones.",
-                "Para graficos interactivos, abrir research_report.html o equity_drawdown.html.",
-            ],
-        ),
-    ]
-    report_path.write_bytes(_build_simple_pdf("Reporte de Research", sections))
-    return report_path
-
-
 def build_experiment_zip(experiment_dir: Path | str) -> bytes:
     root = Path(experiment_dir).resolve()
     if not root.exists():
@@ -452,98 +381,6 @@ def _html_table(rows: list[dict[str, object]]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
 
 
-def _format_pdf_metric(value: object, *, percent: bool = False) -> str:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return "no disponible"
-    if pd.isna(numeric):
-        return "no disponible"
-    if percent:
-        return f"{numeric:.2%}"
-    return f"{numeric:.2f}"
-
-
-def _build_simple_pdf(title: str, sections: list[tuple[str, list[str]]]) -> bytes:
-    page_width = 612
-    page_height = 792
-    margin_x = 54
-    y = 742
-    pages: list[list[tuple[str, int, int]]] = [[]]
-
-    def add_line(text: str, size: int = 11, spacing: int = 15) -> None:
-        nonlocal y
-        if y < 58:
-            pages.append([])
-            y = 742
-        pages[-1].append((_pdf_safe_text(text), size, y))
-        y -= spacing
-
-    add_line(title, 18, 24)
-    for heading, lines in sections:
-        y -= 6
-        add_line(heading, 14, 20)
-        for line in lines:
-            for wrapped in textwrap.wrap(str(line), width=92) or [""]:
-                add_line(wrapped, 10, 14)
-
-    streams = [_page_stream(page, margin_x) for page in pages]
-    return _pdf_document(streams, page_width=page_width, page_height=page_height)
-
-
-def _page_stream(page: list[tuple[str, int, int]], margin_x: int) -> bytes:
-    commands = []
-    for text, size, y in page:
-        commands.append(f"BT /F1 {size} Tf {margin_x} {y} Td ({_escape_pdf_string(text)}) Tj ET")
-    return "\n".join(commands).encode("latin-1", errors="replace")
-
-
-def _pdf_document(streams: list[bytes], *, page_width: int, page_height: int) -> bytes:
-    page_count = len(streams)
-    font_id = 3 + page_count * 2
-    objects: list[tuple[int, bytes]] = []
-    page_ids = [3 + index * 2 for index in range(page_count)]
-    objects.append((1, b"<< /Type /Catalog /Pages 2 0 R >>"))
-    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
-    objects.append((2, f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode("ascii")))
-    for index, stream in enumerate(streams):
-        page_id = page_ids[index]
-        stream_id = page_id + 1
-        page = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] "
-            f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {stream_id} 0 R >>"
-        )
-        objects.append((page_id, page.encode("ascii")))
-        objects.append((stream_id, b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream"))
-    objects.append((font_id, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
-
-    pdf = b"%PDF-1.4\n"
-    offsets = {0: 0}
-    for object_id, payload in objects:
-        offsets[object_id] = len(pdf)
-        pdf += f"{object_id} 0 obj\n".encode("ascii") + payload + b"\nendobj\n"
-    xref_start = len(pdf)
-    max_id = max(offsets)
-    pdf += f"xref\n0 {max_id + 1}\n".encode("ascii")
-    pdf += b"0000000000 65535 f \n"
-    for object_id in range(1, max_id + 1):
-        pdf += f"{offsets[object_id]:010d} 00000 n \n".encode("ascii")
-    pdf += (
-        f"trailer\n<< /Size {max_id + 1} /Root 1 0 R >>\n"
-        f"startxref\n{xref_start}\n%%EOF\n"
-    ).encode("ascii")
-    return pdf
-
-
-def _pdf_safe_text(value: object) -> str:
-    normalized = unicodedata.normalize("NFKD", str(value))
-    return normalized.encode("ascii", errors="ignore").decode("ascii")
-
-
-def _escape_pdf_string(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-
 def _report_file(path: Path, label: str | None = None) -> ReportFile:
     suffix = path.suffix.lower()
     if suffix == ".json":
@@ -554,8 +391,6 @@ def _report_file(path: Path, label: str | None = None) -> ReportFile:
         mime = "text/markdown"
     elif suffix == ".html":
         mime = "text/html"
-    elif suffix == ".pdf":
-        mime = "application/pdf"
     else:
         mime = "application/octet-stream"
     return ReportFile(label=label or path.name, path=path, mime=mime)

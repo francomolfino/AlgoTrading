@@ -11,6 +11,6 @@ Esta guia resume el flujo recomendado para investigar una estrategia sin tocar c
 7. Revisar `Results Dashboard`: primero diagnostico, despues equity/drawdown.
 8. Correr `Robustness Lab` y `Stress Tests` desde el experimento.
 9. Completar el Journal con hipotesis, conclusion y proximo test.
-10. Exportar el reporte HTML o PDF desde `Reports / Export`.
+10. Exportar el reporte HTML desde `Reports / Export`.
 
 Regla practica: no mires solo retorno. Mira benchmark, drawdown, cantidad de trades, costos, robustez, stress y calidad de datos.
