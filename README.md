@@ -13,6 +13,7 @@ La app y el laboratorio fueron hechos 100% vibecodeando.
 - [Arquitectura](docs/ARCHITECTURE.md)
 - [Workflow de research](docs/RESEARCH_WORKFLOW.md)
 - [Supuestos de backtesting](docs/BACKTESTING_ASSUMPTIONS.md)
+- [Auditoria de correctness del backtester](docs/BACKTEST_CORRECTNESS_AUDIT.md)
 - [Limitaciones de paper trading](docs/PAPER_TRADING_LIMITATIONS.md)
 - [Calidad de datos](docs/DATA_QUALITY.md)
 - [Snapshots visuales de Streamlit](docs/UI_SNAPSHOTS.md)
